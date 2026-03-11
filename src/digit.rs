@@ -63,7 +63,7 @@ use crate::Ternary;
 /// innermost loop of nearly every operation (`to_dec`, `each_zip`,
 /// `balanced_carry`, add/sub), eliminating its match branch cascades
 /// into speedups across the entire library.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(i8)]
 pub enum Digit {
     /// Represents -1
@@ -179,6 +179,16 @@ impl Digit {
             Digit::Zero => '0',
             Digit::Pos => '+',
         }
+    }
+
+    /// Returns the ASCII byte for this digit: `b'-'`, `b'0'`, or `b'+'`.
+    ///
+    /// Uses a 3-element table indexed by `(self as i8 + 1)`.
+    #[inline]
+    pub const fn to_byte(self) -> u8 {
+        // Neg=-1 → index 0 → b'-'=45, Zero=0 → index 1 → b'0'=48, Pos=1 → index 2 → b'+'=43
+        const BYTES: [u8; 3] = [b'-', b'0', b'+'];
+        BYTES[(self as i8 + 1) as usize]
     }
 
     /// Creates a `Digit` from its character representation.
@@ -616,12 +626,17 @@ impl Digit {
     ///
     /// This method evaluates the negation based on Post's logic in ternary systems,
     /// which differs from standard negation logic.
+    ///
+    /// # Optimization: branchless arithmetic
+    ///
+    /// The match tree is replaced by: `v = self+1 ∈ {0,1,2}; result = v - 3*(v>>1)`.
+    /// `v>>1` maps {0,1,2} → {0,0,1}, so we subtract 3 only for v=2 (Pos→Neg).
+    /// Pure arithmetic — no branches — enables LLVM auto-vectorization in `shu_up`.
+    #[inline]
     pub const fn post(self) -> Self {
-        match self {
-            Digit::Neg => Digit::Zero,
-            Digit::Zero => Digit::Pos,
-            Digit::Pos => Digit::Neg,
-        }
+        let v = self as i8 + 1; // {0, 1, 2}
+        // SAFETY: v - 3*(v>>1) ∈ {0,1,-1} = valid Digit discriminants.
+        unsafe { core::mem::transmute::<i8, Digit>(v - 3 * (v >> 1)) }
     }
 
     /// Performs the inverse operation from the Post's negation of the current `Digit`.
@@ -630,12 +645,18 @@ impl Digit {
     ///     - `Digit::Pos` when `self` is `Digit::Neg`.
     ///     - `Digit::Neg` when `self` is `Digit::Zero`.
     ///     - `Digit::Zero` when `self` is `Digit::Pos`.
+    ///
+    /// # Optimization: branchless arithmetic
+    ///
+    /// `d + 2 - 3*((d>>7)+1)` where `d = self as i8`.
+    /// `d>>7` (arithmetic) maps {-1,0,1} → {-1,0,0}; adding 1 gives {0,1,1}.
+    /// So we subtract 3 for Zero and Pos but not for Neg. Pure arithmetic — no branches
+    /// — enables LLVM auto-vectorization in `shu_down`.
+    #[inline]
     pub const fn pre(self) -> Self {
-        match self {
-            Digit::Neg => Digit::Pos,
-            Digit::Zero => Digit::Neg,
-            Digit::Pos => Digit::Zero,
-        }
+        let d = self as i8;
+        // SAFETY: d + 2 - 3*((d>>7)+1) ∈ {1,-1,0} = valid Digit discriminants.
+        unsafe { core::mem::transmute::<i8, Digit>(d + 2 - 3 * ((d >> 7) + 1)) }
     }
 
     /// This method maps this `Digit` value to its corresponding unbalanced ternary
@@ -750,7 +771,9 @@ impl Digit {
     /// SAFETY: sign(a+b) for a,b ∈ {−1,0,1} is in {−1,0,1}.
     pub const fn accept_anything(self, other: Self) -> Self {
         let s = self.to_i8() + other.to_i8();
-        let v = if s > 0 { 1i8 } else if s < 0 { -1i8 } else { 0i8 };
+        // Branchless signum: same pattern as `parse` / `post` / `pre`.
+        // LLVM emits PCMPGTB×2 + PSUBB when vectorising over a digit slice.
+        let v = (s > 0) as i8 - (s < 0) as i8;
         // SAFETY: signum of sum of {-1,0,1} is in {-1,0,1}.
         unsafe { core::mem::transmute::<i8, Digit>(v) }
     }
@@ -814,7 +837,11 @@ impl Digit {
     /// assert_eq!(Pos.clamp_down(),  Zero);
     /// ```
     pub const fn clamp_down(self) -> Self {
-        if matches!(self, Self::Pos) { Self::Zero } else { self }
+        let v = self as i8;
+        // Arithmetic right shift: -1→-1, 0→0, 1→0. min(v, 0).
+        // LLVM emits PSARB for SIMD vectorisation in `each(clamp_down)`.
+        // SAFETY: v>>7 for v∈{-1,0,1} yields {-1,0,0} ⊂ valid Digit discriminants.
+        unsafe { core::mem::transmute::<i8, Digit>(v >> 7) }
     }
 
     /// Clamp toward positive: `max(self, Zero)`.
@@ -830,7 +857,11 @@ impl Digit {
     /// assert_eq!(Pos.clamp_up(),  Pos);
     /// ```
     pub const fn clamp_up(self) -> Self {
-        if matches!(self, Self::Neg) { Self::Zero } else { self }
+        let v = self as i8;
+        // -((-v) >> 7): negate to flip sign, shift to isolate, negate back. max(v, 0).
+        // LLVM emits PSARB for SIMD vectorisation in `each(clamp_up)`.
+        // SAFETY: -((-v)>>7) for v∈{-1,0,1} yields {0,0,1} ⊂ valid Digit discriminants.
+        unsafe { core::mem::transmute::<i8, Digit>(-((-v) >> 7)) }
     }
 
     /// Ternary equality: returns `Pos` if `self == other`, `Neg` otherwise.

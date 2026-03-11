@@ -1,16 +1,17 @@
 //! Performance benchmarks using only std::time (no extra dependencies).
 //!
-//! Run with: cargo test --release --test bench -- --nocapture
+//! Run with: cargo test --release --test bench -- --nocapture --test-threads=1
 //!
 //! ## Baseline comparison
 //!
 //! Save a baseline with:
-//!   cargo test --release --test bench -- --nocapture 2>&1 | tee bench-baseline.txt
+//!   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-baseline.txt
 //!
-//! Compare against baseline with:
-//!   cargo test --release --test bench -- --nocapture 2>&1 | tee bench-new.txt
-//!   bash -c 'paste <(grep "ns/op" bench-baseline.txt) <(grep "ns/op" bench-new.txt) | \
-//!     awk -F"[()]" "{b=\$2; n=\$4; pct=(b-n)/b*100; printf \"%s  before=%.1f after=%.1f  %+.1f%%\n\", \$1, b, n, pct}"'
+//! After changes, compare with the Python script:
+//!   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-new.txt
+//!   python3 bench-compare.py bench-baseline.txt bench-new.txt
+//!
+//! Options: --top N (show top N), --threshold PCT (min %% to report), --min-ns NS (noise floor)
 
 use balanced_ternary::concepts::DigitOperate;
 use balanced_ternary::terscii;
@@ -22,19 +23,30 @@ const ITERS: u32 = 500_000;
 
 /// Runs `f` for `iters` iterations (after warmup), prints ns/op in a stable
 /// machine-parseable format: `  <label>  (<ns/op> ns/op)`.
+///
+/// Takes the minimum elapsed time over 3 passes to suppress OS jitter,
+/// cache cold-starts, and CPU frequency ramp-up. The minimum represents
+/// the "best achievable" latency — a stable, noise-resistant measurement.
 fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
-    // Warmup: 10% of iters
+    // Warmup: 10% of iters — ensures CPU boost and instruction cache are hot.
     for _ in 0..iters / 10 {
         f();
     }
 
-    let start = Instant::now();
-    for _ in 0..iters {
-        f();
+    // 5 timed passes; take the minimum (least OS interference).
+    let mut min_secs = f64::MAX;
+    for _ in 0..5 {
+        let start = Instant::now();
+        for _ in 0..iters {
+            f();
+        }
+        let secs = start.elapsed().as_secs_f64();
+        if secs < min_secs {
+            min_secs = secs;
+        }
     }
-    let elapsed = start.elapsed();
-    let secs = elapsed.as_secs_f64();
-    let ops_sec = iters as f64 / secs;
+
+    let ops_sec = iters as f64 / min_secs;
 
     let (ops_val, ops_unit) = if ops_sec >= 1_000_000.0 {
         (ops_sec / 1_000_000.0, "M ops/s")
@@ -44,7 +56,7 @@ fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
         (ops_sec, "  ops/s")
     };
 
-    let ns_op = secs * 1e9 / iters as f64;
+    let ns_op = min_secs * 1e9 / iters as f64;
 
     // Format: label column + stats. The `ns/op` token is used by the diff script.
     println!(

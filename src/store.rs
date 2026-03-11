@@ -5,6 +5,52 @@ use alloc::vec::Vec;
 use core::fmt::Display;
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Shl, Shr, Sub};
 
+/// Compute the 5-trit balanced ternary expansion of `val` ∈ [-121, 121].
+///
+/// Used at compile time to build `EXPAND_DIGITS_LUT`.
+const fn expand_digits_compute(val: i8) -> [Digit; 5] {
+    let negative = val < 0;
+    let mut unsigned = if negative { (-(val as i16)) as u16 } else { val as u16 };
+    let mut buf = [Digit::Zero; 5];
+    let mut i = 5usize;
+    while i > 0 {
+        i -= 1;
+        let rem = unsigned % 3;
+        unsigned /= 3;
+        if rem == 2 {
+            buf[i] = Digit::Neg;
+            unsigned += 1;
+        } else {
+            // SAFETY: rem ∈ {0, 1} ⊂ {-1, 0, 1}.
+            buf[i] = unsafe { core::mem::transmute::<i8, Digit>(rem as i8) };
+        }
+    }
+    if negative {
+        let mut j = 0usize;
+        while j < 5 {
+            // SAFETY: negating a valid Digit i8 value yields another valid Digit value.
+            buf[j] = unsafe { core::mem::transmute::<i8, Digit>(-(buf[j] as i8)) };
+            j += 1;
+        }
+    }
+    buf
+}
+
+/// Precomputed 5-trit expansion for all valid `TritsChunk` values [-121, 121].
+///
+/// Indexed by `val + 121` (i.e., index 0 = value -121, index 121 = value 0,
+/// index 242 = value 121). Replaces the per-call division loop in `expand_digits`
+/// with a single indexed copy of 5 bytes.
+const EXPAND_DIGITS_LUT: [[Digit; 5]; 243] = {
+    let mut lut = [[Digit::Zero; 5]; 243];
+    let mut i: i32 = -121;
+    while i <= 121 {
+        lut[(i + 121) as usize] = expand_digits_compute(i as i8);
+        i += 1;
+    }
+    lut
+};
+
 /// A struct to store 5 ternary digits (~7.8 bits) value into one byte.
 ///
 /// `TritsChunks` helps store ternary numbers into a compact memory structure.
@@ -149,28 +195,17 @@ impl TritsChunk {
     /// Shared helper used by `to_ternary`, `to_fixed_ternary`, and
     /// `to_digits` to avoid going through `Ternary::from_dec`. The value
     /// range [-121, 121] always fits in exactly 5 trits.
+    /// Expands `val` ∈ [-121, 121] into its 5-trit balanced ternary representation.
+    ///
+    /// # Optimization: precomputed LUT
+    ///
+    /// The previous implementation ran a 5-iteration division loop plus a conditional
+    /// negation pass. Since the domain is exactly 243 values, we precompute all
+    /// expansions at compile time in `EXPAND_DIGITS_LUT` (1215 bytes) and replace
+    /// the entire computation with a single indexed 5-byte copy.
     #[inline]
     fn expand_digits(val: i8) -> [Digit; 5] {
-        let negative = val < 0;
-        let mut unsigned = (val as i16).unsigned_abs();
-        let mut buf = [Digit::Zero; 5];
-        for slot in buf.iter_mut().rev() {
-            let rem = unsigned % 3;
-            unsigned /= 3;
-            if rem == 2 {
-                *slot = Digit::Neg;
-                unsigned += 1;
-            } else {
-                // rem ∈ {0, 1} here. SAFETY: rem ∈ {0, 1} ⊂ {-1, 0, 1}.
-                *slot = unsafe { core::mem::transmute::<i8, Digit>(rem as i8) };
-            }
-        }
-        if negative {
-            for slot in buf.iter_mut() {
-                *slot = -*slot;
-            }
-        }
-        buf
+        EXPAND_DIGITS_LUT[(val as i16 + 121) as usize]
     }
 
     /// # Example
@@ -239,16 +274,33 @@ impl DataTernary {
     /// for a 5-trit chunk). No intermediate allocations.
     pub fn from_ternary(ternary: Ternary) -> Self {
         let len = ternary.log();
-        let diff = (5 - len % 5) % 5;
-        let ternary = ternary.with_length(len + diff);
+        let partial = len % 5; // digits in the leading partial chunk (0 = full)
         let slice = ternary.to_digit_slice();
-        let num_chunks = slice.len() / 5;
+        let num_chunks = (len + 4) / 5;
 
         const WEIGHTS: [i8; 5] = [81, 27, 9, 3, 1]; // 3^4, 3^3, 3^2, 3^1, 3^0
 
         let mut chunks = Vec::with_capacity(num_chunks);
-        for i in 0..num_chunks {
-            let chunk_slice = &slice[i * 5..(i + 1) * 5];
+
+        // Leading partial chunk: use only the last `partial` weights so that
+        // the high-order trit positions are implicitly zero-padded. Eliminates
+        // the `with_length` clone that the previous code required.
+        let start = if partial != 0 {
+            let first = &slice[..partial];
+            let val: i8 = first
+                .iter()
+                .zip(WEIGHTS[5 - partial..].iter())
+                .map(|(d, &w)| d.to_i8() * w)
+                .sum();
+            chunks.push(TritsChunk::from_dec(val));
+            partial
+        } else {
+            0
+        };
+
+        // Remaining full 5-digit chunks.
+        let tail = &slice[start..];
+        for chunk_slice in tail.chunks_exact(5) {
             let val: i8 = chunk_slice
                 .iter()
                 .zip(WEIGHTS.iter())
@@ -256,6 +308,7 @@ impl DataTernary {
                 .sum();
             chunks.push(TritsChunk::from_dec(val));
         }
+
         Self { chunks }
     }
 
@@ -299,7 +352,15 @@ impl DataTernary {
         for chunk in &self.chunks {
             digits.extend_from_slice(&TritsChunk::expand_digits(chunk.to_dec()));
         }
-        Ternary::new(digits).trim()
+        // Trim leading zeros in-place — avoids the second Vec allocation that
+        // `Ternary::new(digits).trim()` would incur.
+        let first_nz = digits.iter().position(|d| *d != Digit::Zero);
+        match first_nz {
+            None => { digits.truncate(0); digits.push(Digit::Zero); }
+            Some(0) => {}
+            Some(pos) => { digits.drain(0..pos); }
+        }
+        Ternary::new(digits)
     }
 
     /// Converts the `DataTernary` into its fixed-length `Ternary` representation.
@@ -2368,6 +2429,26 @@ fn uter_add_u128(a: u64, b: u64, mask_l: u64) -> u64 {
     (d.wrapping_sub(e) & (ml | (ml << 1))) as u64
 }
 
+/// Precomputed 5-trit BCT encoding: `UTER5_LUT[v]` = 10-bit BCT word for `v < 243`.
+/// Trit k occupies bits `2k..2k+2`: `00=0, 01=1, 10=2`.
+const UTER5_LUT: [u16; 243] = {
+    let mut lut = [0u16; 243];
+    let mut v = 0usize;
+    while v < 243 {
+        let mut word = 0u16;
+        let mut n = v;
+        let mut i = 0;
+        while i < 5 {
+            word |= ((n % 3) as u16) << (2 * i);
+            n /= 3;
+            i += 1;
+        }
+        lut[v] = word;
+        v += 1;
+    }
+    lut
+};
+
 // =========================================================================
 // UTer9 — 9-trit unsigned ternary (uter9_t), range 0..19682
 // =========================================================================
@@ -2391,14 +2472,11 @@ impl UTer9 {
     pub const MAX: Self = Self(MASK9_H); // all 10 = 2 per trit → 3^9 - 1 = 19682
 
     #[inline] pub fn from_dec(v: u32) -> Self {
-        let mut word = 0u32;
-        let mut n = v % 19683; // 3^9
-        for k in 0..9u32 {
-            let d = n % 3;
-            word |= d << (2 * k);
-            n /= 3;
-        }
-        Self(word)
+        let mut n = (v % 19683) as usize; // 3^9
+        let lo = UTER5_LUT[n % 243] as u32;
+        n /= 243;
+        let hi = UTER5_LUT[n] as u32; // n < 82 (19683/243 = 81)
+        Self(lo | (hi << 10))
     }
 
     #[inline] pub fn to_dec(&self) -> u32 {
@@ -2497,12 +2575,13 @@ impl UTer27 {
     pub const MAX: Self = Self(MASK27_H); // all 10 = 2 → 3^27 - 1
 
     #[inline] pub fn from_dec(v: u64) -> Self {
-        let mut word = 0u64;
         let mut n = v % 7_625_597_484_987; // 3^27
-        for k in 0..27u32 {
-            let d = n % 3;
-            word |= d << (2 * k);
-            n /= 3;
+        let mut word = 0u64;
+        let mut shift = 0u32;
+        while n > 0 {
+            word |= (UTER5_LUT[(n % 243) as usize] as u64) << shift;
+            n /= 243;
+            shift += 10;
         }
         Self(word)
     }

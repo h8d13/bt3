@@ -77,6 +77,22 @@ pub fn decode(t: &Ternary) -> Option<char> {
     }
 }
 
+
+/// Precomputed `Tryte<5>` for each TERSCII value 0–80.
+///
+/// Eliminates `from_i64` (5 divisions per call) in the hot path of `encode_tryte`.
+#[cfg(feature = "tryte")]
+const TRYTE5_LUT: [Tryte<5>; 81] = {
+    let mut lut = [Tryte::<5>::ZERO; 81];
+    let mut i = 0usize;
+    while i < 81 {
+        lut[i] = Tryte::<5>::from_i64(i as i64);
+        i += 1;
+    }
+    lut
+};
+
+
 /// Encode a character to its TERSCII value as a [`Tryte<5>`] (stack-allocated, no heap).
 ///
 /// TERSCII uses 4-trit quartets (3⁴ = 81 values), but balanced ternary `Tryte<4>` only
@@ -88,7 +104,7 @@ pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
     let code = c as u32;
     if code < 128 {
         let v = ENCODE_LUT[code as usize];
-        if v >= 0 { Some(Tryte::<5>::from_i64(v as i64)) } else { None }
+        if v >= 0 { Some(TRYTE5_LUT[v as usize]) } else { None }
     } else {
         None
     }
@@ -97,10 +113,18 @@ pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
 /// Decode a [`Tryte<5>`] TERSCII value back to a character.
 ///
 /// Returns `None` if the value is outside 0–80.
+/// Uses parallel constant multiplications (no serial Horner dependency chain)
+/// to compute the decimal value, then a single unsigned bounds check (`v < 81`
+/// after casting, which subsumes the `>= 0` check) before the `TABLE` lookup.
 #[cfg(feature = "tryte")]
 #[inline]
 pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
-    let v = t.to_i64();
+    let raw = t.to_digit_slice();
+    let v = raw[0] as i8 as i64 * 81
+          + raw[1] as i8 as i64 * 27
+          + raw[2] as i8 as i64 * 9
+          + raw[3] as i8 as i64 * 3
+          + raw[4] as i8 as i64;
     if v >= 0 && (v as usize) < 81 {
         Some(TABLE.as_bytes()[v as usize] as char)
     } else {

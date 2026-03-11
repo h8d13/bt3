@@ -54,13 +54,11 @@ use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Sub, Shl, Shr};
 /// converting to/from decimal.
 #[inline]
 fn balanced_carry(sum: i8) -> (i8, i8) {
-    if sum > 1 {
-        (1, sum - 3)
-    } else if sum < -1 {
-        (-1, sum + 3)
-    } else {
-        (0, sum)
-    }
+    // Branchless: carry is +1 when sum > 1, -1 when sum < -1, else 0.
+    // Same signum pattern as `Digit::accept_anything`.
+    // digit = sum - carry * 3 maps {2→-1, 3→0, -2→1, -3→0}, identity elsewhere.
+    let carry = (sum > 1) as i8 - (sum < -1) as i8;
+    (carry, sum - carry * 3)
 }
 
 /// Perform native balanced ternary addition/subtraction on two digit slices.
@@ -85,23 +83,34 @@ fn balanced_carry(sum: i8) -> (i8, i8) {
 /// - **Cache-friendly** — sequential array access, no pointer chasing.
 fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
     let len = a.len().max(b.len());
-    let (oa, ob) = (len - a.len(), len - b.len());
 
     let mut digits = Vec::with_capacity(len + 1);
     let mut carry: i8 = 0;
 
-    for i in (0..len).rev() {
-        let da = if i < oa { 0 } else { a[i - oa].to_i8() };
-        let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
-        if negate_b {
-            db = -db;
+    // Fast path: equal-length operands — eliminates per-iteration branch.
+    if a.len() == b.len() {
+        for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+            let db_val = if negate_b { -db.to_i8() } else { db.to_i8() };
+            let (c, d) = balanced_carry(da.to_i8() + db_val + carry);
+            carry = c;
+            // SAFETY: balanced_carry output is in {-1, 0, 1}.
+            digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
         }
-
-        let (c, d) = balanced_carry(da + db + carry);
-        carry = c;
-        // SAFETY: balanced_carry output is in {-1, 0, 1}.
-        digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
+    } else {
+        let (oa, ob) = (len - a.len(), len - b.len());
+        for i in (0..len).rev() {
+            let da = if i < oa { 0 } else { a[i - oa].to_i8() };
+            let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
+            if negate_b {
+                db = -db;
+            }
+            let (c, d) = balanced_carry(da + db + carry);
+            carry = c;
+            // SAFETY: balanced_carry output is in {-1, 0, 1}.
+            digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
+        }
     }
+
     if carry != 0 {
         // SAFETY: balanced_carry carry is in {-1, 0, 1}.
         digits.push(unsafe { core::mem::transmute::<i8, Digit>(carry) });
@@ -122,17 +131,8 @@ fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
 impl Neg for &Ternary {
     type Output = Ternary;
 
-    /// Returns the negation of the current `Ternary` object.
-    ///
-    /// Negates each digit in the number.
-    ///
-    /// # Optimization: pre-allocated vec
-    ///
-    /// Output length equals input length. We allocate once via
-    /// `Vec::with_capacity` and map each digit, avoiding incremental
-    /// growth.
     fn neg(self) -> Self::Output {
-        Ternary::new(self.to_digit_slice().iter().map(|d| -*d).collect())
+        self.each(|d| -d)
     }
 }
 
@@ -242,8 +242,10 @@ impl Mul<&Ternary> for &Ternary {
             let v = acc[k];
             let mut rem = v % 3;
             let mut carry = v / 3;
-            if rem > 1 { rem -= 3; carry += 1; }
-            else if rem < -1 { rem += 3; carry -= 1; }
+            // Branchless adjustment: same signum pattern as `balanced_carry`.
+            let adj = (rem > 1) as i8 - (rem < -1) as i8;
+            rem -= adj * 3;
+            carry += adj;
             acc[k] = rem;
             acc[k - 1] += carry;
         }

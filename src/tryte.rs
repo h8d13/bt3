@@ -151,10 +151,12 @@ impl<const SIZE: usize> Tryte<SIZE> {
     /// # Returns
     ///
     /// A `Tryte` representing the equivalent ternary number.
-    pub fn from_i64(v: i64) -> Self {
+    pub const fn from_i64(v: i64) -> Self {
         let mut raw = [Digit::Zero; SIZE];
         let mut n = v;
-        for i in (0..SIZE).rev() {
+        let mut i = SIZE;
+        while i > 0 {
+            i -= 1;
             // Normalize remainder to {0, 1, 2} then map to balanced {0, 1, -1}
             let rem = ((n % 3) + 3) % 3;
             let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
@@ -176,8 +178,20 @@ impl<const SIZE: usize> Tryte<SIZE> {
     /// assert_eq!(t.shu_up().to_string(), "0+-");
     /// assert_eq!(t.shu_up().shu_up().shu_up().to_string(), "-0+");
     /// ```
+    /// # Optimization: 3-element LUT (LLVM emits PSHUFB shuffle)
+    ///
+    /// Instead of the branchless arithmetic form of `Digit::post` (which is better
+    /// for large `Ternary` arrays but generates more instructions for small `Tryte`
+    /// sizes), we use a 3-entry compile-time LUT indexed by `d+1`. LLVM recognizes
+    /// this pattern and emits a single `PSHUFB` byte-shuffle, processing all SIZE
+    /// digits in one vector instruction.
     pub fn shu_up(self) -> Self {
-        self.each(Digit::post)
+        const MAP: [Digit; 3] = [Digit::Zero, Digit::Pos, Digit::Neg];
+        let mut raw = self.raw;
+        for d in raw.iter_mut() {
+            *d = MAP[(*d as i8 + 1) as usize];
+        }
+        Self::new(raw)
     }
 
     /// Shifts every trit's value one step down the cycle: `+→0`, `0→-`, `-→+`.
@@ -190,8 +204,17 @@ impl<const SIZE: usize> Tryte<SIZE> {
     /// let t = Tryte::<3>::from("-0+");
     /// assert_eq!(t.shu_down().to_string(), "+-0");
     /// ```
+    ///
+    /// # Optimization: 3-element LUT (LLVM emits PSHUFB shuffle)
+    ///
+    /// Same reasoning as `shu_up`: 3-entry LUT → PSHUFB for small fixed-size arrays.
     pub fn shu_down(self) -> Self {
-        self.each(Digit::pre)
+        const MAP: [Digit; 3] = [Digit::Pos, Digit::Neg, Digit::Zero];
+        let mut raw = self.raw;
+        for d in raw.iter_mut() {
+            *d = MAP[(*d as i8 + 1) as usize];
+        }
+        Self::new(raw)
     }
 
     /// Tritwise consensus: keeps the value where both trytes agree, `Zero` elsewhere.
