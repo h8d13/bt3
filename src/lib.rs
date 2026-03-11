@@ -1106,6 +1106,7 @@ pub use crate::tryte::Tryte;
 #[cfg(feature = "terscii")]
 pub mod terscii;
 
+
 #[cfg(test)]
 #[cfg(feature = "ternary-string")]
 #[test]
