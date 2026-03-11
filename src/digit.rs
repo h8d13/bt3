@@ -55,15 +55,23 @@ use crate::Ternary;
 /// Instead, use these operators from `Ternary` directly.
 ///
 /// Do so to `add` and `sub` ternaries, too.
+/// # Optimization: `#[repr(i8)]` with value-matching discriminants
+///
+/// By assigning discriminants that match the logical values (`Neg = -1`,
+/// `Zero = 0`, `Pos = 1`), conversions via `to_i8()` / `from_i8()` become
+/// trivial casts instead of match trees. Since `to_i8()` sits in the
+/// innermost loop of nearly every operation (`to_dec`, `each_zip`,
+/// `balanced_carry`, add/sub), eliminating its match branch cascades
+/// into speedups across the entire library.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-#[repr(u8)]
+#[repr(i8)]
 pub enum Digit {
     /// Represents -1
-    Neg,
+    Neg = -1,
     /// Represents 0
-    Zero,
+    Zero = 0,
     /// Represents +1
-    Pos,
+    Pos = 1,
 }
 
 impl Digit {
@@ -195,12 +203,15 @@ impl Digit {
     ///     - -1 for `Digit::Neg`
     ///     - 0 for `Digit::Zero`
     ///     - 1 for `Digit::Pos`
+    ///
+    /// # Optimization: zero-cost cast
+    ///
+    /// With `#[repr(i8)]` and discriminants `Neg = -1, Zero = 0, Pos = 1`,
+    /// this is a direct reinterpretation of the enum's in-memory value —
+    /// no branch, no lookup table.
+    #[inline]
     pub const fn to_i8(&self) -> i8 {
-        match self {
-            Digit::Neg => -1,
-            Digit::Zero => 0,
-            Digit::Pos => 1,
-        }
+        *self as i8
     }
 
     /// Creates a `Digit` from its integer representation.
@@ -210,6 +221,7 @@ impl Digit {
     ///     - 0 for `Digit::Zero`
     ///     - 1 for `Digit::Pos`
     /// - Panics if the input integer is invalid.
+    #[inline]
     pub const fn from_i8(i: i8) -> Digit {
         match i {
             -1 => Digit::Neg,
@@ -395,16 +407,26 @@ impl Digit {
     ///
     /// This method implements a ternary logic equivalence, which captures the relationship between
     /// two balanced ternary `Digit`s based on their logical equivalence.
+    /// # Optimization: k3_equiv = mul = a·b
+    ///
+    /// The truth table for k3_equiv is identical to multiplication:
+    /// (−,−)→+, (−,0)→0, (−,+)→−, (0,·)→0, (+,·)→·
+    /// This follows directly from Jones: equiv(a,b) = a·b.
+    ///
+    /// # Examples
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Pos, Zero};
+    ///
+    /// assert_eq!(Neg.k3_equiv(Neg), Pos);   // both false → true
+    /// assert_eq!(Neg.k3_equiv(Zero), Zero); // false * unknown → unknown
+    /// assert_eq!(Neg.k3_equiv(Pos), Neg);   // false * true → false
+    /// assert_eq!(Zero.k3_equiv(Pos), Zero); // unknown * anything → unknown
+    /// assert_eq!(Pos.k3_equiv(Neg), Neg);   // true * false → false
+    /// assert_eq!(Pos.k3_equiv(Pos), Pos);   // both true → true
+    /// ```
     pub const fn k3_equiv(self, other: Self) -> Self {
-        match self {
-            Digit::Neg => match other {
-                Digit::Neg => Digit::Pos,
-                Digit::Zero => Digit::Zero,
-                Digit::Pos => Digit::Neg,
-            },
-            Digit::Zero => Digit::Zero,
-            Digit::Pos => other,
-        }
+        // SAFETY: product of {-1,0,1} stays in {-1,0,1}.
+        unsafe { core::mem::transmute::<i8, Digit>(self.to_i8() * other.to_i8()) }
     }
 
     /// Performs a ternary AND operation for the current `Digit` and another `Digit`.
@@ -654,6 +676,180 @@ impl Digit {
         }
     }
 
+    /// Tritwise **consensus**: returns the shared value when both trits agree, `Zero` otherwise.
+    ///
+    /// This extracts the positions where two ternary numbers are identical.
+    /// Useful for range checks and filtering: only positions where both operands
+    /// carry the same information survive.
+    ///
+    /// | `self` | `other` | result |
+    /// |--------|---------|--------|
+    /// | `+`    | `+`     | `+`    |
+    /// | `-`    | `-`     | `-`    |
+    /// | `0`    | `0`     | `0`    |
+    /// | any    | differ  | `0`    |
+    ///
+    /// # Examples
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Pos, Zero};
+    ///
+    /// assert_eq!(Pos.consensus(Pos), Pos);
+    /// assert_eq!(Neg.consensus(Neg), Neg);
+    /// assert_eq!(Pos.consensus(Neg), Zero);
+    /// assert_eq!(Zero.consensus(Pos), Zero);
+    /// ```
+    /// Branchless: `a · (a == b)`.
+    /// When equal: `a * 1 = a`. When unequal: `a * 0 = 0`.
+    ///
+    /// Uses transmute instead of `from_i8` to avoid its `_ => panic!` arm.
+    /// SAFETY: a·(a==b) for a,b ∈ {−1,0,1} yields a value in {−1,0,1}.
+    pub const fn consensus(self, other: Self) -> Self {
+        let a = self.to_i8();
+        let b = other.to_i8();
+        let v = a * ((a == b) as i8);
+        // SAFETY: v ∈ {-1, 0, 1} — either a*1=a or a*0=0, both in {-1,0,1}.
+        unsafe { core::mem::transmute::<i8, Digit>(v) }
+    }
+
+    /// Tritwise **accept-anything** (ANY): the non-zero trit wins; conflicting non-zero trits → `Zero`.
+    ///
+    /// `Zero` acts as a transparent pass-through. When both operands are non-zero
+    /// and different, the conflict resolves to `Zero`. This lets two trytes with
+    /// non-overlapping non-zero fields be merged losslessly:
+    ///
+    /// ```text
+    /// 000---  ANY  +++000  =  +++---
+    /// ```
+    ///
+    /// | `self` | `other` | result       |
+    /// |--------|---------|--------------|
+    /// | `0`    | any     | `other`      |
+    /// | any    | `0`     | `self`       |
+    /// | `+`    | `+`     | `+`          |
+    /// | `-`    | `-`     | `-`          |
+    /// | `+`    | `-`     | `0` conflict |
+    /// | `-`    | `+`     | `0` conflict |
+    ///
+    /// # Examples
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Pos, Zero};
+    ///
+    /// assert_eq!(Zero.accept_anything(Pos), Pos);
+    /// assert_eq!(Neg.accept_anything(Zero), Neg);
+    /// assert_eq!(Pos.accept_anything(Pos), Pos);
+    /// assert_eq!(Pos.accept_anything(Neg), Zero);
+    /// ```
+    /// # Optimization: Jones identity `sign(a + b)`
+    ///
+    /// All 9 cases reduce to the sign of the sum:
+    /// - Both zero or conflict (±1 + ∓1 = 0) → 0.
+    /// - One zero → the other (sign of ±1 = ±1).
+    /// - Both equal → their shared sign (±1 + ±1 = ±2, sign = ±1).
+    ///
+    /// Eliminates the 5-arm match entirely.
+    /// SAFETY: sign(a+b) for a,b ∈ {−1,0,1} is in {−1,0,1}.
+    pub const fn accept_anything(self, other: Self) -> Self {
+        let s = self.to_i8() + other.to_i8();
+        let v = if s > 0 { 1i8 } else if s < 0 { -1i8 } else { 0i8 };
+        // SAFETY: signum of sum of {-1,0,1} is in {-1,0,1}.
+        unsafe { core::mem::transmute::<i8, Digit>(v) }
+    }
+
+    /// Decoder: returns `Pos` if `self == Neg`, otherwise `Neg`.
+    ///
+    /// Jones logic Function 2 / NTI ("Not True Indicator"). Useful for
+    /// detecting the negative/false trit in a ternary word.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Neg.is_neg(),  Pos);
+    /// assert_eq!(Zero.is_neg(), Neg);
+    /// assert_eq!(Pos.is_neg(),  Neg);
+    /// ```
+    pub const fn is_neg(self) -> Self {
+        if matches!(self, Self::Neg) { Self::Pos } else { Self::Neg }
+    }
+
+    /// Decoder: returns `Pos` if `self == Zero`, otherwise `Neg`.
+    ///
+    /// Jones logic Function K ("Is Unknown"). Detects the zero/unknown trit.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Neg.is_zero(),  Neg);
+    /// assert_eq!(Zero.is_zero(), Pos);
+    /// assert_eq!(Pos.is_zero(),  Neg);
+    /// ```
+    pub const fn is_zero(self) -> Self {
+        if matches!(self, Self::Zero) { Self::Pos } else { Self::Neg }
+    }
+
+    /// Decoder: returns `Pos` if `self == Pos`, otherwise `Neg`.
+    ///
+    /// Jones logic Function 6 ("Is True"). Detects the positive/true trit.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Neg.is_pos(),  Neg);
+    /// assert_eq!(Zero.is_pos(), Neg);
+    /// assert_eq!(Pos.is_pos(),  Pos);
+    /// ```
+    pub const fn is_pos(self) -> Self {
+        if matches!(self, Self::Pos) { Self::Pos } else { Self::Neg }
+    }
+
+    /// Clamp toward negative: `min(self, Zero)`.
+    ///
+    /// Jones logic Function C ("Clamp Down" / `a ∧ 0`).
+    /// Returns `Neg` for negative input, `Zero` for zero or positive.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Neg.clamp_down(),  Neg);
+    /// assert_eq!(Zero.clamp_down(), Zero);
+    /// assert_eq!(Pos.clamp_down(),  Zero);
+    /// ```
+    pub const fn clamp_down(self) -> Self {
+        if matches!(self, Self::Pos) { Self::Zero } else { self }
+    }
+
+    /// Clamp toward positive: `max(self, Zero)`.
+    ///
+    /// Jones logic Function R ("Clamp Up" / `a ∨ 0`).
+    /// Returns `Pos` for positive input, `Zero` for zero or negative.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Neg.clamp_up(),  Zero);
+    /// assert_eq!(Zero.clamp_up(), Zero);
+    /// assert_eq!(Pos.clamp_up(),  Pos);
+    /// ```
+    pub const fn clamp_up(self) -> Self {
+        if matches!(self, Self::Neg) { Self::Zero } else { self }
+    }
+
+    /// Ternary equality: returns `Pos` if `self == other`, `Neg` otherwise.
+    ///
+    /// Unlike Rust's `PartialEq` (which returns `bool`), this returns a `Digit`
+    /// so it can be used as input to other ternary operations.
+    ///
+    /// ```
+    /// use balanced_ternary::Digit::{Neg, Zero, Pos};
+    ///
+    /// assert_eq!(Pos.eq_digit(Pos),  Pos);
+    /// assert_eq!(Neg.eq_digit(Neg),  Pos);
+    /// assert_eq!(Pos.eq_digit(Neg),  Neg);
+    /// assert_eq!(Zero.eq_digit(Pos), Neg);
+    /// ```
+    pub const fn eq_digit(self, other: Self) -> Self {
+        if self.to_i8() == other.to_i8() { Self::Pos } else { Self::Neg }
+    }
+
     /// Increments the `Digit` value and returns a `Ternary` result.
     ///
     /// - The rules for incrementing are based on ternary arithmetic:
@@ -705,12 +901,16 @@ impl Neg for Digit {
     /// - `Digit::Neg` becomes `Digit::Pos`
     /// - `Digit::Pos` becomes `Digit::Neg`
     /// - `Digit::Zero` remains `Digit::Zero`
+    ///
+    /// # Optimization: zero-cost transmute
+    ///
+    /// With `#[repr(i8)]` discriminants, negation is a single `neg` instruction.
+    /// Uses transmute instead of `from_i8` to avoid the `_ => panic!` arm.
+    /// SAFETY: −a for a ∈ {−1, 0, 1} is always in {−1, 0, 1}.
+    #[inline]
     fn neg(self) -> Self::Output {
-        match self {
-            Digit::Neg => Digit::Pos,
-            Digit::Zero => Digit::Zero,
-            Digit::Pos => Digit::Neg,
-        }
+        // SAFETY: negation of {-1,0,1} stays in {-1,0,1}.
+        unsafe { core::mem::transmute::<i8, Digit>(-self.to_i8()) }
     }
 }
 
@@ -731,12 +931,16 @@ impl Add<Digit> for Digit {
     ///
     /// - Panics:
     ///   - This method does not panic under any circumstances.
+    /// # Optimization: inline balanced arithmetic + transmute
+    ///
+    /// a + b for a,b ∈ {−1,0,1} gives s ∈ {−2,…,2}. Rebalance by ∓3:
+    /// s=2 → −1, s=−2 → 1, else s unchanged — single pass, no match trees.
+    /// SAFETY: rebalanced digit ∈ {−1, 0, 1}.
     fn add(self, other: Digit) -> Self::Output {
-        match self {
-            Digit::Neg => other.pre(),
-            Digit::Zero => other,
-            Digit::Pos => other.post(),
-        }
+        let s = self.to_i8() + other.to_i8();
+        let d = if s > 1 { s - 3 } else if s < -1 { s + 3 } else { s };
+        // SAFETY: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
+        unsafe { core::mem::transmute::<i8, Digit>(d) }
     }
 }
 
@@ -750,12 +954,12 @@ impl Sub<Digit> for Digit {
     ///
     /// - Panics:
     ///   - This method does not panic under any circumstances.
+    /// # Optimization: same inline balanced arithmetic as `add`
     fn sub(self, other: Digit) -> Self::Output {
-        match self {
-            Digit::Neg => other.post(),
-            Digit::Zero => -other,
-            Digit::Pos => other.pre(),
-        }
+        let s = self.to_i8() - other.to_i8();
+        let d = if s > 1 { s - 3 } else if s < -1 { s + 3 } else { s };
+        // SAFETY: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
+        unsafe { core::mem::transmute::<i8, Digit>(d) }
     }
 }
 
@@ -777,12 +981,13 @@ impl Mul<Digit> for Digit {
     ///
     /// - Returns:
     ///   - A `Digit` instance representing the result of the multiplication.
+    /// # Optimization: direct i8 multiply + transmute
+    ///
+    /// Jones: mul is just sign-arithmetic. Product of {−1,0,1}² ⊆ {−1,0,1}.
+    /// SAFETY: a·b for a,b ∈ {−1,0,1} is always in {−1,0,1}.
     fn mul(self, other: Digit) -> Self::Output {
-        match self {
-            Digit::Neg => -other,
-            Digit::Zero => Digit::Zero,
-            Digit::Pos => other,
-        }
+        // SAFETY: product of {-1,0,1} stays in {-1,0,1}.
+        unsafe { core::mem::transmute::<i8, Digit>(self.to_i8() * other.to_i8()) }
     }
 }
 
@@ -843,12 +1048,11 @@ impl BitAnd for Digit {
     /// assert_eq!(Zero & Pos, Zero);
     /// assert_eq!(Pos & Zero, Zero);
     /// ```
+    /// Jones identity: AND = min(a, b).
+    /// Selects between `self`/`other` directly — no `from_i8`, no panic path.
+    /// Compiles to a single `cmp` + `cmov` on x86-64.
     fn bitand(self, other: Self) -> Self::Output {
-        match self {
-            Digit::Neg => Digit::Neg,
-            Digit::Zero => other.negative(),
-            Digit::Pos => other,
-        }
+        if self.to_i8() <= other.to_i8() { self } else { other }
     }
 }
 
@@ -877,12 +1081,11 @@ impl BitOr for Digit {
     /// assert_eq!(Zero | Pos, Pos);
     /// assert_eq!(Pos | Zero, Pos);
     /// ```
+    /// Jones identity: OR = max(a, b).
+    /// Selects between `self`/`other` directly — no `from_i8`, no panic path.
+    /// Compiles to a single `cmp` + `cmov` on x86-64.
     fn bitor(self, other: Self) -> Self::Output {
-        match self {
-            Digit::Neg => other,
-            Digit::Zero => other.positive(),
-            Digit::Pos => Digit::Pos,
-        }
+        if self.to_i8() >= other.to_i8() { self } else { other }
     }
 }
 
@@ -911,11 +1114,74 @@ impl BitXor for Digit {
     /// assert_eq!(Zero ^ Neg, Zero);
     /// assert_eq!(Pos ^ Pos, Neg);
     /// ```
+    /// Jones identity: XOR = −(a · b).
+    ///
+    /// Verified: same sign → product +1 → negate → −1 (false).
+    ///           diff sign → product −1 → negate → +1 (true).
+    ///           either zero → product 0 → negate → 0 (unknown).
+    ///
+    /// Uses transmute instead of `from_i8` to avoid its `_ => panic!` arm.
+    /// SAFETY: −(a·b) for a,b ∈ {−1,0,1} always yields a value in {−1,0,1}.
     fn bitxor(self, rhs: Self) -> Self::Output {
-        match self {
-            Digit::Neg => rhs,
-            Digit::Zero => Digit::Zero,
-            Digit::Pos => -rhs,
+        let v = -(self.to_i8() * rhs.to_i8());
+        // SAFETY: product of {-1,0,1} is in {-1,0,1}; negation preserves that.
+        unsafe { core::mem::transmute::<i8, Digit>(v) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Digit::{Neg, Pos, Zero};
+
+    #[test]
+    fn consensus_agreement() {
+        assert_eq!(Pos.consensus(Pos), Pos);
+        assert_eq!(Neg.consensus(Neg), Neg);
+        assert_eq!(Zero.consensus(Zero), Zero);
+    }
+
+    #[test]
+    fn consensus_disagreement_gives_zero() {
+        assert_eq!(Pos.consensus(Neg), Zero);
+        assert_eq!(Neg.consensus(Pos), Zero);
+        assert_eq!(Pos.consensus(Zero), Zero);
+        assert_eq!(Zero.consensus(Pos), Zero);
+        assert_eq!(Neg.consensus(Zero), Zero);
+        assert_eq!(Zero.consensus(Neg), Zero);
+    }
+
+    #[test]
+    fn accept_anything_zero_is_transparent() {
+        assert_eq!(Zero.accept_anything(Pos), Pos);
+        assert_eq!(Zero.accept_anything(Neg), Neg);
+        assert_eq!(Zero.accept_anything(Zero), Zero);
+        assert_eq!(Pos.accept_anything(Zero), Pos);
+        assert_eq!(Neg.accept_anything(Zero), Neg);
+    }
+
+    #[test]
+    fn accept_anything_agreement() {
+        assert_eq!(Pos.accept_anything(Pos), Pos);
+        assert_eq!(Neg.accept_anything(Neg), Neg);
+    }
+
+    #[test]
+    fn accept_anything_conflict_gives_zero() {
+        assert_eq!(Pos.accept_anything(Neg), Zero);
+        assert_eq!(Neg.accept_anything(Pos), Zero);
+    }
+
+    // Where consensus gives a non-zero result, accept_anything must agree.
+    #[test]
+    fn consensus_implies_accept_anything() {
+        for a in [Neg, Zero, Pos] {
+            for b in [Neg, Zero, Pos] {
+                let con = a.consensus(b);
+                let any = a.accept_anything(b);
+                if con != Zero {
+                    assert_eq!(any, con, "a={a:?} b={b:?}");
+                }
+            }
         }
     }
 }

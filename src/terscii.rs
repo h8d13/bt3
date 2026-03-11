@@ -1,0 +1,161 @@
+//! TERSCII — ternary character encoding.
+//!
+//! A 9×9 character table (81 values, 4 trits each) designed for ternary computing.
+//! See <https://homepage.divms.uiowa.edu/~jones/ternary/terscii.shtml>
+//!
+//! Each character maps to a value 0–80 represented as a [`Ternary`] number.
+
+extern crate alloc;
+
+use crate::Ternary;
+#[cfg(feature = "tryte")]
+use crate::Tryte;
+
+/// Inverse lookup table: ASCII code → TERSCII value (0–80), or -1 if not mapped.
+///
+/// Built from [`TABLE`]: covers all 128 ASCII code points.
+/// Non-ASCII characters are rejected before this table is consulted.
+#[rustfmt::skip]
+const ENCODE_LUT: [i8; 128] = [
+//   0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15
+     0,    9,   18,   27,   36,   45,   54,   63,   72,   -1,   -1,   -1,   -1,   -1,   -1,   -1, // 0x00–0x0F (controls ES–SD)
+    -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1,   -1, // 0x10–0x1F
+     1,   64,   -1,   -1,   -1,   -1,   -1,   19,   -1,   -1,   -1,   -1,   28,   10,   55,   -1, // 0x20–0x2F  ' ','!',..,"'",..,,,-,.
+     2,   11,   20,   29,   38,   47,   56,   65,   74,    3,   46,   37,   -1,   -1,   -1,   73, // 0x30–0x3F  0–9,:,;,..?
+    -1,   12,   21,   30,   39,   48,   57,   66,   75,    4,   13,   22,   31,   40,   49,   58, // 0x40–0x4F  @,A–O
+    67,   76,    5,   14,   23,   32,   41,   50,   59,   68,   77,   -1,   -1,   -1,   -1,    6, // 0x50–0x5F  P–Z,[,\,],^,_
+    -1,   15,   24,   33,   42,   51,   60,   69,   78,    7,   16,   25,   34,   43,   52,   61, // 0x60–0x6F  `,a–o
+    70,   79,    8,   17,   26,   35,   44,   53,   62,   71,   80,   -1,   -1,   -1,   -1,   -1, // 0x70–0x7F  p–z,{,|,},~,DEL
+];
+
+/// TERSCII table: index = character value (0–80).
+///
+/// Arranged as a 9×9 grid; value = row × 9 + column.
+///
+/// ```text
+///      col: 0   1   2   3   4   5   6   7   8
+/// row 0:   ES  SP   0   9   I   R   _   i   r
+/// row 1:   EL   -   1   A   J   S   a   j   s
+/// row 2:   ET   '   2   B   K   T   b   k   t
+/// row 3:   LR   ,   3   C   L   U   c   l   u
+/// row 4:   OP   ;   4   D   M   V   d   m   v
+/// row 5:   RL   :   5   E   N   W   e   n   w
+/// row 6:   SU   .   6   F   O   X   f   o   x
+/// row 7:   HT   !   7   G   P   Y   g   p   y
+/// row 8:   SD   ?   8   H   Q   Z   h   q   z
+/// ```
+pub const TABLE: &str =
+    "\x00 09IR_ir\x01-1AJSajs\x02'2BKTbkt\x03,3CLUclu\
+     \x04;4DMVdmv\x05:5ENWenw\x06.6FOXfox\x07!7GPYgpy\x08?8HQZhqz";
+
+/// Encode a character to its TERSCII [`Ternary`] value (0–80).
+///
+/// Returns `None` if the character is not in the TERSCII table.
+/// Uses an O(1) 128-entry LUT for all ASCII characters.
+pub fn encode(c: char) -> Option<Ternary> {
+    let code = c as u32;
+    if code < 128 {
+        let v = ENCODE_LUT[code as usize];
+        if v >= 0 { Some(Ternary::from_dec(v as i64)) } else { None }
+    } else {
+        None
+    }
+}
+
+/// Decode a [`Ternary`] value (0–80) back to its TERSCII character.
+///
+/// Returns `None` if the value is outside the 0–80 range.
+/// Uses O(1) byte indexing since all TERSCII chars are single-byte ASCII.
+pub fn decode(t: &Ternary) -> Option<char> {
+    let v = t.to_dec();
+    if v >= 0 && (v as usize) < 81 {
+        Some(TABLE.as_bytes()[v as usize] as char)
+    } else {
+        None
+    }
+}
+
+/// Encode a character to its TERSCII value as a [`Tryte<5>`] (stack-allocated, no heap).
+///
+/// `Tryte<5>` holds exactly 4 trits — the natural word size for TERSCII (3⁴ = 81).
+/// Faster than [`encode`] since it avoids heap allocation.
+#[cfg(feature = "tryte")]
+pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
+    let code = c as u32;
+    if code < 128 {
+        let v = ENCODE_LUT[code as usize];
+        if v >= 0 { Some(Tryte::<5>::from_i64(v as i64)) } else { None }
+    } else {
+        None
+    }
+}
+
+/// Decode a [`Tryte<5>`] TERSCII value back to a character.
+///
+/// Returns `None` if the value is outside 0–80.
+#[cfg(feature = "tryte")]
+pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
+    let v = t.to_i64();
+    if v >= 0 && (v as usize) < 81 {
+        Some(TABLE.as_bytes()[v as usize] as char)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::string::String;
+
+    #[test]
+    fn test_known_values() {
+        assert_eq!(encode(' ').unwrap().to_dec(), 1);
+        assert_eq!(encode('H').unwrap().to_dec(), 75);
+        assert_eq!(encode('e').unwrap().to_dec(), 51);
+        assert_eq!(encode('l').unwrap().to_dec(), 34);
+        assert_eq!(encode('o').unwrap().to_dec(), 61);
+        assert_eq!(encode(',').unwrap().to_dec(), 28);
+        assert_eq!(encode('W').unwrap().to_dec(), 50);
+        assert_eq!(encode('r').unwrap().to_dec(), 8);
+        assert_eq!(encode('d').unwrap().to_dec(), 42);
+        assert_eq!(encode('!').unwrap().to_dec(), 64);
+    }
+
+    #[test]
+    fn test_roundtrip_hello_world() {
+        let msg: String = "Hello, World!"
+            .chars()
+            .map(|c| decode(&encode(c).unwrap()).unwrap())
+            .collect();
+        assert_eq!(msg, "Hello, World!");
+    }
+
+    #[test]
+    fn test_roundtrip_all_printable() {
+        let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+        for c in printable.chars() {
+            let t = encode(c).unwrap_or_else(|| panic!("encode({c:?}) failed"));
+            let c2 = decode(&t).unwrap_or_else(|| panic!("decode failed for {c:?}"));
+            assert_eq!(c, c2);
+        }
+    }
+
+    #[test]
+    fn test_decode_out_of_range() {
+        assert!(decode(&Ternary::from_dec(-1)).is_none());
+        assert!(decode(&Ternary::from_dec(81)).is_none());
+        assert!(decode(&Ternary::from_dec(100)).is_none());
+    }
+
+    #[test]
+    fn test_encode_unknown() {
+        assert!(encode('€').is_none());
+        assert!(encode('α').is_none());
+    }
+
+    #[test]
+    fn test_table_length() {
+        assert_eq!(TABLE.chars().count(), 81);
+    }
+}

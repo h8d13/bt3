@@ -10,9 +10,15 @@ categories = ["data-structures", "mathematics", "science", "no-std"]
 repository = "https://github.com/Trehinos/balanced-ternary"
 
 [features]
-default = ["tryte", "ternary-store"]
+default = ["tryte", "ternary-store", "terscii"]
 ternary-store = ["ternary-string"]
 tryte = ["ternary-string"]
 ternary-string = []
+terscii = ["ternary-string"]
+
+[[test]]
+name = "hello"
+path = "tests/examples/hello.rs"
+harness = false
 
 [dependencies]

@@ -53,6 +53,8 @@
 //! - [DataTernary]: a variable length ternary number stored into [TritsChunk]s,
 //! - [TritsChunk]: a fixed size copy-type 5 digits stored into one byte,
 //! - [Ter40]: a fixed size copy-type 40 digits stored into one 64 bits integer. Implements [DigitOperate].
+//! - [BctTer32]: 32-trit split BCT `(pos:u32, neg:u32)` — O(1) trit-logical ops.
+//! - [IlBctTer32]: 32-trit Jones interleaved BCT in a single `u64` (`00=−1, 01=0, 10=+1`).
 //!
 
 #![no_std]
@@ -61,7 +63,7 @@ extern crate alloc;
 pub mod concepts;
 
 #[cfg(feature = "ternary-string")]
-use alloc::{format, string::String, string::ToString, vec, vec::Vec};
+use alloc::{format, string::String, vec, vec::Vec};
 
 use crate::concepts::DigitOperate;
 #[cfg(feature = "ternary-string")]
@@ -301,21 +303,39 @@ impl Ternary {
     /// let ternary = "+-0".parse::<Ternary>().unwrap();
     /// assert_eq!(ternary.to_string(), "+-0");
     /// ```
+    /// # Optimization: pre-allocated vec
+    ///
+    /// We know the exact digit count from the string length (all valid chars
+    /// are single-byte ASCII: `+`, `0`, `-`), so we allocate once upfront.
     pub fn parse(str: &str) -> Self {
-        let mut repr = Ternary::new(vec![]);
+        let mut digits = Vec::with_capacity(str.len());
         for c in str.chars() {
-            repr.digits.push(Digit::from_char(c));
+            digits.push(Digit::from_char(c));
         }
-        repr
+        Ternary::new(digits)
     }
 
     /// Converts the `Ternary` object to its integer (decimal) representation.
     ///
-    /// Calculates the sum of each digit's value multiplied by the appropriate power of 3.
+    /// # Optimization: Horner's method
+    ///
+    /// The previous implementation computed `digit * 3^rank` per digit,
+    /// calling `i64::pow(rank)` which internally uses exponentiation by
+    /// squaring — O(log rank) multiplications per digit, O(n log n) total.
+    /// It also iterated in reverse (`.rev()`), adding iterator overhead.
+    ///
+    /// Horner's method evaluates the polynomial MSB-first:
+    ///
+    /// ```text
+    /// value = (((d[0] * 3 + d[1]) * 3 + d[2]) * 3 + ... + d[n-1])
+    /// ```
+    ///
+    /// This is exactly **one multiply + one add per digit**, O(n) total,
+    /// and iterates in natural (MSB-first) storage order — no `.rev()`.
     pub fn to_dec(&self) -> i64 {
-        let mut dec = 0;
-        for (rank, digit) in self.digits.iter().rev().enumerate() {
-            dec += digit.to_i8() as i64 * 3_i64.pow(rank as u32);
+        let mut dec: i64 = 0;
+        for digit in self.digits.iter() {
+            dec = dec * 3 + digit.to_i8() as i64;
         }
         dec
     }
@@ -324,35 +344,61 @@ impl Ternary {
     ///
     /// The input number is converted into its balanced ternary representation,
     /// with digits represented as `Digit`s.
+    ///
+    /// # Optimization: direct modular arithmetic
+    ///
+    /// Instead of converting to a base-3 string via `format_radix` and then
+    /// parsing each character back (2 allocations + per-digit char→u8 parse),
+    /// we compute balanced ternary digits directly using modular arithmetic:
+    ///
+    /// - Extract `remainder = x % 3` (values 0, 1, or 2).
+    /// - Remainders 0 and 1 map directly to digits `Zero` and `Pos`.
+    /// - Remainder 2 is "rebalanced" to digit `Neg` (-1) with a carry of +1
+    ///   into the next higher position (since 2 = 3·1 + (-1)).
+    /// - For negative inputs, we compute the positive form and negate each
+    ///   digit in-place (avoiding a second pass via `-&repr`).
+    ///
+    /// This eliminates all intermediate string/char allocations and reduces
+    /// `from_dec` to a tight loop of integer divmod operations.
     pub fn from_dec(dec: i64) -> Self {
-        let sign = dec.signum();
-        let str = format_radix(dec.abs(), 3);
-        let mut carry = 0u8;
-        let mut repr = Ternary::new(vec![]);
-        for digit in str.chars().rev() {
-            let digit = <u8 as FromStr>::from_str(&digit.to_string()).unwrap() + carry;
-            if digit < 2 {
-                repr.digits.push(Digit::from_i8(digit as i8));
-                carry = 0;
-            } else if digit == 2 {
-                repr.digits.push(Digit::from_i8(-1));
-                carry = 1;
-            } else if digit == 3 {
-                repr.digits.push(Digit::from_i8(0));
-                carry = 1;
+        if dec == 0 {
+            return Ternary::new(vec![Zero]);
+        }
+
+        let negative = dec < 0;
+        let mut x = dec.unsigned_abs();
+        // i64::MAX needs at most 40 trits (3^40 > i64::MAX). Pre-allocating
+        // eliminates up to 6 Vec reallocations for large values.
+        let mut digits = Vec::with_capacity(40);
+
+        while x > 0 {
+            let rem = x % 3;
+            x /= 3;
+            // Rebalance: remainder 2 becomes digit -1 with carry +1.
+            // This is the core trick of balanced ternary conversion:
+            // 2 = 3·1 + (-1), so we emit -1 and bump the quotient.
+            if rem == 2 {
+                digits.push(Neg);
+                x += 1;
             } else {
-                panic!("Ternary::from_dec(): Invalid digit: {}", digit);
+                // rem ∈ {0, 1} here — safe to transmute.
+                // SAFETY: rem ∈ {0, 1} ⊂ {-1, 0, 1}.
+                digits.push(unsafe { core::mem::transmute::<i8, Digit>(rem as i8) });
             }
         }
-        if carry == 1 {
-            repr.digits.push(Digit::from_i8(1));
+
+        // Digits were built LSB-first; reverse to MSB-first.
+        digits.reverse();
+
+        // For negative inputs, negate in-place rather than allocating
+        // a second Ternary via the Neg operator.
+        if negative {
+            for d in digits.iter_mut() {
+                *d = -*d;
+            }
         }
-        repr.digits.reverse();
-        if sign == -1 {
-            -&repr
-        } else {
-            repr
-        }
+
+        Ternary::new(digits)
     }
 
     /// Converts the balanced ternary number to its unbalanced representation as a string.
@@ -433,21 +479,19 @@ impl Ternary {
     /// # Notes
     ///
     /// This method does not mutate the original `Ternary` object but returns a new representation.
+    /// # Optimization: digit-scan instead of `to_dec()`
+    ///
+    /// The previous implementation called `self.to_dec() == 0` to detect the
+    /// all-zeros case. That performed O(n) multiplications and power-of-3
+    /// accumulations just to check a condition that is trivially visible from
+    /// the digit array itself. We now use `Iterator::position` to find the
+    /// first non-zero digit and slice from there — pure O(n) comparison with
+    /// no arithmetic.
     pub fn trim(&self) -> Self {
-        if self.to_dec() == 0 {
-            return Ternary::parse("0");
+        match self.digits.iter().position(|d| *d != Zero) {
+            None => Ternary::new(vec![Zero]),
+            Some(pos) => Ternary::new(self.digits[pos..].to_vec()),
         }
-        let mut repr = Ternary::new(vec![]);
-        let mut first_digit = false;
-        for digit in self.digits.iter() {
-            if !first_digit && digit != &Zero {
-                first_digit = true;
-            }
-            if first_digit {
-                repr.digits.push(*digit);
-            }
-        }
-        repr
     }
 
     /// Adjusts the representation of the `Ternary` number to have a fixed number of digits.
@@ -481,15 +525,22 @@ impl Ternary {
     /// let fixed = ternary.with_length(1);
     /// assert_eq!(fixed.to_string(), "+");
     /// ```
+    /// # Optimization: single allocation
+    ///
+    /// The previous implementation allocated a temporary `vec![Zero; diff]`,
+    /// then created an empty `Ternary` and extended it twice (zeroes + digits).
+    /// We now do one `Vec::with_capacity` and fill it in order — zero padding
+    /// followed by the existing digits — avoiding intermediate allocations and
+    /// redundant memcpys.
     pub fn with_length(&self, length: usize) -> Self {
-        if length < self.log() {
+        if length <= self.log() {
             return self.clone();
         }
-        let zeroes = vec![Zero; length - self.log()];
-        let mut repr = Ternary::new(vec![]);
-        repr.digits.extend(zeroes);
-        repr.digits.extend(self.digits.iter().cloned());
-        repr
+        let pad = length - self.log();
+        let mut digits = Vec::with_capacity(length);
+        digits.extend(core::iter::repeat(Zero).take(pad));
+        digits.extend_from_slice(&self.digits);
+        Ternary::new(digits)
     }
 
     /// Converts the `Ternary` number into a string representation by applying a given
@@ -524,12 +575,319 @@ impl Ternary {
     /// * The function provides flexibility to define custom string representations
     ///   for the ternary number digits.
     /// * Call to `Ternary::to_string()` is equivalent to `Ternary::to_string_repr(Digit::to_char)`.
+    /// # Optimization: pre-allocated string
+    ///
+    /// Each digit maps to exactly one ASCII character, so the output length
+    /// equals the digit count. Pre-allocating avoids `String` reallocation
+    /// during the push loop.
     pub fn to_string_repr<F: Fn(&Digit) -> char>(&self, transform: F) -> String {
-        let mut str = String::new();
+        let mut s = String::with_capacity(self.digits.len());
         for digit in self.digits.iter() {
-            str.push(transform(digit));
+            s.push(transform(digit));
         }
-        str
+        s
+    }
+
+    /// Shifts every trit's **value** one step up the cycle: `-→0`, `0→+`, `+→-`.
+    ///
+    /// This is the ternary-native SHU↑ operation (no binary equivalent).
+    /// It applies [`Digit::post`] to every position. Three consecutive calls
+    /// return the original number (period-3 cycle).
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// let t = ter("-0+");
+    /// assert_eq!(t.shu_up().to_string(), "0+-");
+    /// assert_eq!(t.shu_up().shu_up().to_string(), "+-0");
+    /// assert_eq!(t.shu_up().shu_up().shu_up().to_string(), "-0+");
+    /// ```
+    /// Returns the sign of this `Ternary` as a single `Digit`.
+    ///
+    /// Balanced ternary's symmetric digit set means the sign equals the
+    /// most significant non-zero trit — no arithmetic required, just a
+    /// left-to-right scan.
+    ///
+    /// - Returns `Pos` if the number is positive.
+    /// - Returns `Neg` if the number is negative.
+    /// - Returns `Zero` if the number is zero.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Digit::{Pos, Neg, Zero}};
+    ///
+    /// assert_eq!(ter("+0-").signum(), Pos);
+    /// assert_eq!(ter("-0+").signum(), Neg);
+    /// assert_eq!(ter("000").signum(), Zero);
+    /// ```
+    pub fn signum(&self) -> Digit {
+        self.digits.iter().copied().find(|&d| d != Zero).unwrap_or(Zero)
+    }
+
+    /// Returns the absolute value of this `Ternary`.
+    ///
+    /// In balanced ternary, `abs` is free: if negative, negate (flip every
+    /// trit); otherwise clone. No magnitude computation needed.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// assert_eq!(ter("-++").abs().to_dec(), 5);
+    /// assert_eq!(ter("+--").abs().to_dec(), 5);
+    /// assert_eq!(ter("0").abs().to_dec(), 0);
+    /// ```
+    pub fn abs(&self) -> Self {
+        if self.signum() == Neg { -self } else { self.clone() }
+    }
+
+    /// Arithmetic (signed) right shift by `n` trit positions: computes `floor(self / 3^n)`.
+    ///
+    /// Unlike the logical [`Shr`](core::ops::Shr) operator (which truncates toward zero),
+    /// this always rounds toward negative infinity — matching the Trillium ISA `srs`
+    /// instruction semantics.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// assert_eq!(ter("+--").shr_signed(1).to_dec(),  1);  // floor(5/3)  =  1
+    /// assert_eq!(ter("-++").shr_signed(1).to_dec(), -2);  // floor(-5/3) = -2
+    /// assert_eq!(ter("-+-").shr_signed(1).to_dec(), -3);  // floor(-7/3) = -3
+    /// assert_eq!(ter("+--").shr_signed(3).to_dec(),  0);  // floor(5/27) =  0
+    /// assert_eq!(ter("-++").shr_signed(3).to_dec(), -1);  // floor(-5/27)= -1
+    /// ```
+    pub fn shr_signed(&self, n: usize) -> Self {
+        if n == 0 {
+            return self.clone();
+        }
+        let digits = self.to_digit_slice();
+        if n >= digits.len() {
+            return if self.signum() == Neg {
+                Ternary::from_dec(-1)
+            } else {
+                Ternary::new(vec![Zero])
+            };
+        }
+        let split = digits.len() - n;
+        let result = Ternary::new(digits[..split].to_vec());
+        // Signum of the dropped (lower) digits determines whether we need to
+        // subtract 1 to convert from balanced-ternary truncation to floor.
+        let dropped_signum = digits[split..]
+            .iter()
+            .copied()
+            .find(|&d| d != Zero)
+            .unwrap_or(Zero);
+        if dropped_signum == Neg {
+            (&result - &Ternary::from_dec(1)).trim()
+        } else {
+            result.trim()
+        }
+    }
+
+    /// Clamp every trit toward negative: `min(trit, Zero)`.
+    ///
+    /// Applies [`Digit::clamp_down`] to every position: `Neg→Neg`, `Zero→Zero`, `Pos→Zero`.
+    ///
+    /// ```
+    /// use balanced_ternary::ter;
+    ///
+    /// assert_eq!(ter("+-0").clamp_down().to_string(), "0-0");
+    /// ```
+    pub fn clamp_down(&self) -> Self { self.each(Digit::clamp_down) }
+
+    /// Clamp every trit toward positive: `max(trit, Zero)`.
+    ///
+    /// Applies [`Digit::clamp_up`] to every position: `Neg→Zero`, `Zero→Zero`, `Pos→Pos`.
+    ///
+    /// ```
+    /// use balanced_ternary::ter;
+    ///
+    /// assert_eq!(ter("+-0").clamp_up().to_string(), "+00");
+    /// ```
+    pub fn clamp_up(&self) -> Self { self.each(Digit::clamp_up) }
+
+    /// Indicator map: `Pos` where trit is `Neg`, `Neg` elsewhere.
+    ///
+    /// Applies [`Digit::is_neg`] to every position.
+    ///
+    /// ```
+    /// use balanced_ternary::ter;
+    ///
+    /// assert_eq!(ter("+-0").map_neg().to_string(), "-+-");
+    /// ```
+    pub fn map_neg(&self) -> Self { self.each(Digit::is_neg) }
+
+    /// Indicator map: `Pos` where trit is `Zero`, `Neg` elsewhere.
+    ///
+    /// Applies [`Digit::is_zero`] to every position.
+    ///
+    /// ```
+    /// use balanced_ternary::ter;
+    ///
+    /// assert_eq!(ter("+-0").map_zero().to_string(), "--+");
+    /// ```
+    pub fn map_zero(&self) -> Self { self.each(Digit::is_zero) }
+
+    /// Indicator map: `Pos` where trit is `Pos`, `Neg` elsewhere.
+    ///
+    /// Applies [`Digit::is_pos`] to every position.
+    ///
+    /// ```
+    /// use balanced_ternary::ter;
+    ///
+    /// assert_eq!(ter("+-0").map_pos().to_string(), "+--");
+    /// ```
+    pub fn map_pos(&self) -> Self { self.each(Digit::is_pos) }
+
+    pub fn shu_up(&self) -> Self {
+        self.each(Digit::post)
+    }
+
+    /// Shifts every trit's **value** one step down the cycle: `+→0`, `0→-`, `-→+`.
+    ///
+    /// Inverse of [`shu_up`](Self::shu_up). Applies [`Digit::pre`] to every position.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// let t = ter("-0+");
+    /// assert_eq!(t.shu_down().to_string(), "+-0");
+    /// assert_eq!(t.shu_up().shu_down().to_string(), "-0+");
+    /// ```
+    pub fn shu_down(&self) -> Self {
+        self.each(Digit::pre)
+    }
+
+    /// Tritwise **consensus**: keeps the value where both numbers agree, `Zero` elsewhere.
+    ///
+    /// Useful for extracting the positions where two ternary numbers carry the
+    /// same information — e.g. range checks or agreement masks.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// // a = [+,+,0,0,-,-], b = [+,0,+,0,-,0]
+    /// // Agreement at positions 0 (+,+) and 4 (-,-) only
+    /// let a = ter("++00--");
+    /// let b = ter("+0+0-0");
+    /// assert_eq!(a.consensus(&b).to_string(), "+000-0");
+    /// ```
+    pub fn consensus(&self, other: &Self) -> Self {
+        self.each_zip(Digit::consensus, other.clone())
+    }
+
+    /// Tritwise **accept-anything** (ANY): non-zero trit wins; conflicting non-zero trits → `Zero`.
+    ///
+    /// `Zero` positions are transparent (pass-through). This allows lossless
+    /// merging of two trytes whose non-zero fields don't overlap:
+    ///
+    /// ```text
+    /// 000--- ANY +++000 = +++---
+    /// ```
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// let a = ter("000---");
+    /// let b = ter("+++000");
+    /// assert_eq!(a.accept_anything(&b).to_string(), "+++---");
+    ///
+    /// // Conflict: opposing non-zero trits cancel to zero
+    /// let c = ter("+");
+    /// let d = ter("-");
+    /// assert_eq!(c.accept_anything(&d).to_string(), "0");
+    /// ```
+    pub fn accept_anything(&self, other: &Self) -> Self {
+        self.each_zip(Digit::accept_anything, other.clone())
+    }
+
+    /// Encodes this `Ternary` as a **heptavintimal** (base-27) string.
+    ///
+    /// Heptavintimal groups trits in threes (trybbles), encoding each group as a
+    /// single character from the 27-symbol alphabet `0–9 A–H K M N P R T V X Z`
+    /// (letters I, J, L, O, Q, S, U, W, Y are omitted to avoid ambiguity with digits).
+    ///
+    /// Each character represents a value from 0 (`---`) to 26 (`+++`) in balanced
+    /// ternary. The number is zero-padded on the left to a multiple of 3 trits first.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// // "000" = 0 → unbiased index 0+13=13 → 'D'
+    /// assert_eq!(ter("000").to_heptavintimal(), "D");
+    /// // "---" = -13 → unbiased index -13+13=0 → '0'
+    /// assert_eq!(ter("---").to_heptavintimal(), "0");
+    /// // "+++" = +13 → unbiased index 13+13=26 → 'Z'
+    /// assert_eq!(ter("+++").to_heptavintimal(), "Z");
+    /// // Multi-trybble: "++-" = 9+3-1=11 → 11+13=24 → 'V'; "-++" = -9+3+1=-5 → -5+13=8 → '8'
+    /// assert_eq!(ter("++-").concat(&ter("-++")).to_heptavintimal(), "V8");
+    /// ```
+    pub fn to_heptavintimal(&self) -> String {
+        const CHARS: &[u8] = b"0123456789ABCDEFGHKMNPRTVXZ";
+        let digits = self.to_digit_slice();
+        let pad = (3 - digits.len() % 3) % 3;
+        let mut out = String::with_capacity((digits.len() + pad) / 3);
+        let mut iter = core::iter::repeat(&Zero).take(pad).chain(digits.iter());
+        loop {
+            let d0 = match iter.next() { Some(d) => d.to_i8(), None => break };
+            let d1 = iter.next().unwrap().to_i8();
+            let d2 = iter.next().unwrap().to_i8();
+            // Convert balanced trybble to unbalanced 0..26: bias = 13 = 1*9+1*3+1
+            let val = (d0 * 9 + d1 * 3 + d2 + 13) as usize;
+            out.push(CHARS[val] as char);
+        }
+        out
+    }
+
+    /// Parses a **heptavintimal** (base-27) string into a `Ternary`.
+    ///
+    /// Inverse of [`to_heptavintimal`](Self::to_heptavintimal).
+    /// Each character maps to 3 trits; the result is trimmed of leading zeros.
+    ///
+    /// Returns `None` if any character is not in the heptavintimal alphabet.
+    ///
+    /// ```
+    /// use balanced_ternary::{ter, Ternary};
+    ///
+    /// assert_eq!(Ternary::from_heptavintimal("D").unwrap().to_dec(), 0);
+    /// assert_eq!(Ternary::from_heptavintimal("0").unwrap().to_dec(), -13);
+    /// assert_eq!(Ternary::from_heptavintimal("Z").unwrap().to_dec(), 13);
+    /// // Round-trip
+    /// let t = ter("+-0+-");
+    /// assert_eq!(Ternary::from_heptavintimal(&t.to_heptavintimal()).unwrap().trim().to_string(),
+    ///            t.trim().to_string());
+    /// ```
+    pub fn from_heptavintimal(s: &str) -> Option<Self> {
+        // Map each hept character to its 0..26 value
+        let char_val = |c: char| -> Option<i8> {
+            match c {
+                '0'..='9' => Some(c as i8 - '0' as i8),
+                'A'..='H' => Some(c as i8 - 'A' as i8 + 10),
+                'K' => Some(19), 'M' => Some(20), 'N' => Some(21),
+                'P' => Some(22), 'R' => Some(23), 'T' => Some(24),
+                'V' => Some(25), 'X' => Some(26), 'Z' => Some(27 - 1),
+                // Accept lowercase input too
+                'a'..='h' => Some(c as i8 - 'a' as i8 + 10),
+                'k' => Some(19), 'm' => Some(20), 'n' => Some(21),
+                'p' => Some(22), 'r' => Some(23), 't' => Some(24),
+                'v' => Some(25), 'x' => Some(26), 'z' => Some(26),
+                _ => None,
+            }
+        };
+        let mut digits = Vec::with_capacity(s.len() * 3);
+        for c in s.chars() {
+            let v = char_val(c)? as i8 - 13; // unbiased: -13..=13
+            // Decompose balanced trybble (v = d0*9 + d1*3 + d2)
+            let r2 = ((v % 3) + 3) % 3;
+            let t2 = if r2 <= 1 { r2 } else { r2 - 3 };
+            let v1 = (v - t2) / 3;
+            let r1 = ((v1 % 3) + 3) % 3;
+            let t1 = if r1 <= 1 { r1 } else { r1 - 3 };
+            let t0 = (v1 - t1) / 3;
+            // SAFETY: t0, t1, t2 ∈ {-1, 0, 1}
+            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t0) });
+            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t1) });
+            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t2) });
+        }
+        Some(Ternary::new(digits).trim())
     }
 
     /// Concatenates the current `Ternary` number with another `Ternary` number.
@@ -556,11 +914,16 @@ impl Ternary {
     /// let concatenated = ternary1.concat(&ternary2);
     /// assert_eq!(concatenated.to_string(), "+0-+");
     /// ```
+    /// # Optimization: pre-allocated vec
+    ///
+    /// We know the exact output length (sum of both digit counts), so we
+    /// allocate once and copy both slices. `extend_from_slice` is a single
+    /// `memcpy` for `Copy` types like `Digit`.
     pub fn concat(&self, other: &Ternary) -> Ternary {
-        let mut t = Ternary::new(vec![]);
-        t.digits.extend(self.digits.iter().cloned());
-        t.digits.extend(other.digits.iter().cloned());
-        t
+        let mut digits = Vec::with_capacity(self.digits.len() + other.digits.len());
+        digits.extend_from_slice(&self.digits);
+        digits.extend_from_slice(&other.digits);
+        Ternary::new(digits)
     }
 }
 
@@ -574,56 +937,80 @@ impl DigitOperate for Ternary {
         self.get_digit(index).cloned()
     }
 
+    /// # Optimization: pre-allocated vec
+    ///
+    /// Output length is known upfront (same as input). Single allocation.
     fn each(&self, f: impl Fn(Digit) -> Digit) -> Self {
-        let mut repr = Ternary::new(vec![]);
+        let mut digits = Vec::with_capacity(self.digits.len());
         for digit in self.digits.iter() {
-            repr.digits.push(f(*digit));
+            digits.push(f(*digit));
         }
-        repr
+        Ternary::new(digits)
     }
 
+    /// # Optimization: pre-allocated vec
     fn each_with(&self, f: impl Fn(Digit, Digit) -> Digit, other: Digit) -> Self {
-        let mut repr = Ternary::new(vec![]);
+        let mut digits = Vec::with_capacity(self.digits.len());
         for digit in self.digits.iter() {
-            repr.digits.push(f(*digit, other));
+            digits.push(f(*digit, other));
         }
-        repr
+        Ternary::new(digits)
     }
 
+    /// # Optimization: O(n²) → O(n), zero allocations beyond the result
+    ///
+    /// The previous implementation had three performance problems:
+    ///
+    /// 1. **`get_digit(i)` is O(i)** — it calls `.iter().rev().nth(i)` which
+    ///    walks `i` elements each time. Inside a loop of `n` iterations this
+    ///    gives O(n²) total work.
+    /// 2. **`with_length` allocation** — pads the shorter operand by allocating
+    ///    a new `Ternary` with leading zeros.
+    /// 3. **Result reversal** — digits were pushed in reverse order then
+    ///    `reverse()`d at the end.
+    ///
+    /// We now iterate MSB-first using offset arithmetic to virtually pad the
+    /// shorter operand with leading zeros (same trick as `Ord::cmp`). This
+    /// gives a single O(n) forward pass with one pre-sized allocation and
+    /// no reversal.
     fn each_zip(&self, f: impl Fn(Digit, Digit) -> Digit, other: Self) -> Self {
-        if self.digits.len() < other.digits.len() {
-            return other.each_zip(f, self.clone());
+        let (a, b) = (&self.digits, &other.digits);
+        let len = a.len().max(b.len());
+        let (oa, ob) = (len - a.len(), len - b.len());
+        let mut digits = Vec::with_capacity(len);
+        for i in 0..len {
+            let da = if i < oa { Zero } else { a[i - oa] };
+            let db = if i < ob { Zero } else { b[i - ob] };
+            digits.push(f(da, db));
         }
-        let other = other.with_length(self.digits.len());
-        let mut repr = Ternary::new(vec![]);
-        for (i, digit) in self.digits.iter().rev().enumerate() {
-            let d_other = other.get_digit(i).unwrap();
-            let res = f(*digit, *d_other);
-            repr.digits.push(res);
-        }
-        repr.digits.reverse();
-        repr
+        Ternary::new(digits)
     }
 
+    /// # Optimization: O(n²) → O(n), same approach as `each_zip`
+    ///
+    /// Same three problems as `each_zip` (see above), plus the carry must
+    /// propagate right-to-left so we still iterate in reverse — but we use
+    /// direct indexing instead of `get_digit(i)`, eliminating the O(i)
+    /// inner walk. One `reverse()` remains (unavoidable for carry direction).
     fn each_zip_carry(
         &self,
         f: impl Fn(Digit, Digit, Digit) -> (Digit, Digit),
         other: Self,
     ) -> Self {
-        if self.digits.len() < other.digits.len() {
-            return other.each_zip_carry(f, self.clone());
-        }
-        let other = other.with_length(self.digits.len());
-        let mut repr = Ternary::new(vec![]);
+        let (a, b) = (&self.digits, &other.digits);
+        let len = a.len().max(b.len());
+        let (oa, ob) = (len - a.len(), len - b.len());
+        let mut digits = Vec::with_capacity(len);
         let mut carry = Zero;
-        for (i, digit) in self.digits.iter().rev().enumerate() {
-            let d_other = other.get_digit(i).unwrap();
-            let (c, res) = f(*digit, *d_other, carry);
+        for i in (0..len).rev() {
+            let da = if i < oa { Zero } else { a[i - oa] };
+            let db = if i < ob { Zero } else { b[i - ob] };
+            let (c, res) = f(da, db, carry);
             carry = c;
-            repr.digits.push(res);
+            digits.push(res);
         }
-        repr.digits.reverse();
-        repr
+        digits.reverse();
+        Ternary::new(digits)
     }
 }
 
@@ -649,8 +1036,35 @@ impl FromStr for Ternary {
 
 #[cfg(feature = "ternary-string")]
 impl Ord for Ternary {
+    /// # Optimization: lexicographic digit comparison
+    ///
+    /// Balanced ternary has a useful property: lexicographic ordering of
+    /// digits (MSB-first, with `Neg < Zero < Pos`) equals numerical ordering.
+    ///
+    /// **Why this works:** each trit position has weight `3^k`. The maximum
+    /// contribution of all lower-order trits combined is
+    /// `sum_{i=0}^{k-1} 3^i = (3^k - 1) / 2`, which is strictly less than
+    /// `3^k`. So a difference in a higher-order trit always dominates,
+    /// making MSB-first lexicographic comparison correct.
+    ///
+    /// The previous implementation called `to_dec()` on both operands,
+    /// performing O(n) multiplications each. This version does a single
+    /// O(n) pass of integer comparisons with no arithmetic beyond subtraction.
     fn cmp(&self, other: &Self) -> Ordering {
-        self.to_dec().cmp(&other.to_dec())
+        let (a, b) = (&self.digits, &other.digits);
+        let len = a.len().max(b.len());
+        // Offsets to virtually pad the shorter operand with leading zeros.
+        let (oa, ob) = (len - a.len(), len - b.len());
+
+        for i in 0..len {
+            let da = if i < oa { 0i8 } else { a[i - oa].to_i8() };
+            let db = if i < ob { 0i8 } else { b[i - ob].to_i8() };
+            match da.cmp(&db) {
+                Ordering::Equal => continue,
+                ord => return ord,
+            }
+        }
+        Ordering::Equal
     }
 }
 
@@ -680,7 +1094,8 @@ mod conversions;
 mod store;
 
 #[cfg(feature = "ternary-store")]
-pub use crate::store::{Ter40, DataTernary, TritsChunk};
+pub use crate::store::{BctTer32, IlBctTer32, Ter40, IlTer40, DataTernary, TritsChunk,
+                        UTer9, UTer27, BTer9, BTer27};
 
 #[cfg(feature = "tryte")]
 mod tryte;
@@ -688,10 +1103,14 @@ mod tryte;
 #[cfg(feature = "tryte")]
 pub use crate::tryte::Tryte;
 
+#[cfg(feature = "terscii")]
+pub mod terscii;
+
 #[cfg(test)]
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_ternary() {
+    use alloc::string::ToString;
     use crate::*;
 
     let repr5 = Ternary::new(vec![Pos, Neg, Neg]);
@@ -749,6 +1168,7 @@ fn test_ternary() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_each() {
+    use alloc::string::ToString;
     use crate::*;
     let ternary = Ternary::parse("+0-");
     assert_eq!(ternary.each(Digit::possibly).to_string(), "++-");
@@ -758,6 +1178,7 @@ fn test_each() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_operations() {
+    use alloc::string::ToString;
     fn test_ternary_eq(a: Ternary, b: &str) {
         let repr = Ternary::parse(b);
         assert_eq!(a.to_string(), repr.to_string());
@@ -816,6 +1237,7 @@ fn test_operations() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_from_str() {
+    use alloc::string::ToString;
     use core::str::FromStr;
 
     let ternary = Ternary::from_str("+-0").unwrap();
@@ -871,4 +1293,99 @@ fn test_iterators() {
     assert_eq!(ternary.iter().cloned().collect::<Vec<_>>(), expected);
     let collected: Vec<Digit> = Ternary::parse("+0-").into_iter().collect();
     assert_eq!(collected, expected);
+}
+
+#[cfg(test)]
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_shu_up_down() {
+    use alloc::string::ToString;
+    use crate::ter;
+
+    // SHU↑: each trit cycles -→0→+→- (Digit::post)
+    let t = ter("-0+");
+    assert_eq!(t.shu_up().to_string(), "0+-");
+    assert_eq!(t.shu_up().shu_up().to_string(), "+-0");
+    // Three shu_up steps = identity
+    assert_eq!(t.shu_up().shu_up().shu_up().to_string(), "-0+");
+
+    // SHU↓ is the inverse of SHU↑
+    assert_eq!(t.shu_down().to_string(), "+-0");
+    assert_eq!(t.shu_up().shu_down().to_string(), "-0+");
+
+    // Two shu_up = one shu_down (period 3)
+    assert_eq!(t.shu_up().shu_up().to_string(), t.shu_down().to_string());
+}
+
+#[cfg(test)]
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_consensus() {
+    use alloc::string::ToString;
+    use crate::ter;
+
+    // Positions that agree survive; all others become 0
+    // a = [+,+,0,0,-,-], b = [+,0,+,0,-,0]
+    // Agreement at pos 0 (+,+) and pos 4 (-,-) only
+    let a = ter("++00--");
+    let b = ter("+0+0-0");
+    assert_eq!(a.consensus(&b).to_string(), "+000-0");
+
+    // Full agreement = identity
+    assert_eq!(a.consensus(&a).to_string(), a.to_string());
+
+    // Full disagreement = all zeros (opposite signs at every non-zero position)
+    let neg_a = ter("--00++");
+    assert_eq!(a.consensus(&neg_a).to_string(), "000000");
+}
+
+#[cfg(test)]
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_accept_anything() {
+    use alloc::string::ToString;
+    use crate::ter;
+
+    // Non-overlapping fields merge losslessly (vine ANY trick)
+    let a = ter("000---");
+    let b = ter("+++000");
+    assert_eq!(a.accept_anything(&b).to_string(), "+++---");
+
+    // Zero is transparent (pass-through); full width preserved
+    let z = ter("000000");
+    assert_eq!(a.accept_anything(&z).to_string(), a.to_string());
+
+    // Conflict: opposing non-zero trits cancel
+    let pos = ter("+");
+    let neg = ter("-");
+    assert_eq!(pos.accept_anything(&neg).to_string(), "0");
+
+    // Self-merge = identity
+    assert_eq!(a.accept_anything(&a).to_string(), a.to_string());
+}
+
+#[cfg(test)]
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_shr_signed() {
+    use crate::ter;
+
+    // Positive: floor(5/3) = 1
+    assert_eq!(ter("+--").shr_signed(1).to_dec(), 1);
+    // Negative: floor(-5/3) = -2
+    assert_eq!(ter("-++").shr_signed(1).to_dec(), -2);
+    // Negative with negative remainder: floor(-7/3) = -3
+    assert_eq!(ter("-+-").shr_signed(1).to_dec(), -3);
+    // Exact division: floor(6/3) = 2
+    assert_eq!(ter("+-0").shr_signed(1).to_dec(), 2);
+    // Shift of zero
+    assert_eq!(ter("0").shr_signed(1).to_dec(), 0);
+    // Large shift of positive: floor(5/27) = 0
+    assert_eq!(ter("+--").shr_signed(3).to_dec(), 0);
+    // Large shift of negative: floor(-5/27) = -1
+    assert_eq!(ter("-++").shr_signed(3).to_dec(), -1);
+    // Zero shift is identity
+    assert_eq!(ter("+--").shr_signed(0).to_dec(), 5);
+    // Multi-trit shift: floor(22/9) = 2
+    assert_eq!(ter("+-++").shr_signed(2).to_dec(), 2);
 }
