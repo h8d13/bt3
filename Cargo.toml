@@ -14,7 +14,7 @@ default = ["tryte", "ternary-store", "terscii"]
 ternary-store = ["ternary-string"]
 tryte = ["ternary-string"]
 ternary-string = []
-terscii = ["ternary-string"]
+terscii = ["ternary-string", "tryte"]
 
 [[test]]
 name = "hello"

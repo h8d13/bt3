@@ -5,8 +5,6 @@
 //!
 //! Each character maps to a value 0–80 represented as a [`Ternary`] number.
 
-extern crate alloc;
-
 use crate::Ternary;
 #[cfg(feature = "tryte")]
 use crate::Tryte;
@@ -52,6 +50,7 @@ pub const TABLE: &str =
 ///
 /// Returns `None` if the character is not in the TERSCII table.
 /// Uses an O(1) 128-entry LUT for all ASCII characters.
+#[inline]
 pub fn encode(c: char) -> Option<Ternary> {
     let code = c as u32;
     if code < 128 {
@@ -66,6 +65,7 @@ pub fn encode(c: char) -> Option<Ternary> {
 ///
 /// Returns `None` if the value is outside the 0–80 range.
 /// Uses O(1) byte indexing since all TERSCII chars are single-byte ASCII.
+#[inline]
 pub fn decode(t: &Ternary) -> Option<char> {
     let v = t.to_dec();
     if v >= 0 && (v as usize) < 81 {
@@ -77,9 +77,11 @@ pub fn decode(t: &Ternary) -> Option<char> {
 
 /// Encode a character to its TERSCII value as a [`Tryte<5>`] (stack-allocated, no heap).
 ///
-/// `Tryte<5>` holds exactly 4 trits — the natural word size for TERSCII (3⁴ = 81).
+/// TERSCII uses 4-trit quartets (3⁴ = 81 values), but balanced ternary `Tryte<4>` only
+/// reaches ±40, so `Tryte<5>` (range ±121) is required to cover the full 0–80 range.
 /// Faster than [`encode`] since it avoids heap allocation.
 #[cfg(feature = "tryte")]
+#[inline]
 pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
     let code = c as u32;
     if code < 128 {
@@ -94,6 +96,7 @@ pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
 ///
 /// Returns `None` if the value is outside 0–80.
 #[cfg(feature = "tryte")]
+#[inline]
 pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
     let v = t.to_i64();
     if v >= 0 && (v as usize) < 81 {
