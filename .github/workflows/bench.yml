@@ -1,0 +1,90 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: ["master"]
+  pull_request:
+    branches: ["master"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry/build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: bench-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: bench-cargo-${{ runner.os }}-
+
+      # Restore the last baseline saved from master.
+      # On PRs this gives the current master numbers to compare against.
+      - name: Restore bench baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: bench-ci-baseline.txt
+          key: bench-baseline-master
+          restore-keys: bench-baseline-
+
+      - name: Run benchmarks (single-threaded)
+        run: |
+          cargo test --release --test bench -- --nocapture --test-threads=1 \
+            2>&1 | tee bench-ci-new.txt
+
+      - name: Compare against baseline
+        id: compare
+        # Use pipefail so --fail-on-regression exit code is not swallowed by tee.
+        shell: bash
+        run: |
+          set -o pipefail
+          if [ -f bench-ci-baseline.txt ]; then
+            python3 bench-compare.py bench-ci-baseline.txt bench-ci-new.txt \
+              --threshold 20 --min-ns 3 --top 20 \
+              --fail-on-regression \
+              | tee bench-ci-diff.txt
+          else
+            echo "No baseline found — this run will become the new baseline."
+            cp bench-ci-new.txt bench-ci-diff.txt
+          fi
+
+      - name: Write job summary
+        if: always()
+        run: |
+          echo "## Benchmark results" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat bench-ci-diff.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload bench results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ github.sha }}
+          path: |
+            bench-ci-new.txt
+            bench-ci-diff.txt
+
+      # Update the stored baseline only on master pushes.
+      - name: Update baseline
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: cp bench-ci-new.txt bench-ci-baseline.txt
+
+      - name: Save baseline cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: actions/cache/save@v4
+        with:
+          path: bench-ci-baseline.txt
+          key: bench-baseline-master-${{ github.sha }}

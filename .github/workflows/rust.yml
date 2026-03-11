@@ -17,6 +17,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      run: cargo build --release --verbose
+    - name: Run unit tests
+      # bench.rs has 1M-iteration loops that time out in CI without --test-threads=1.
+      # Doc tests and unit tests run here; the bench workflow handles performance testing.
+      run: cargo test --release --lib --verbose
+    - name: Run doc tests
+      run: cargo test --release --doc --verbose

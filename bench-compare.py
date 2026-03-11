@@ -49,6 +49,11 @@ def main():
         default=1.0,
         help="Ignore ops faster than this (ns) to reduce noise (default: 1.0 ns)",
     )
+    parser.add_argument(
+        "--fail-on-regression",
+        action="store_true",
+        help="Exit with code 1 if any regression exceeds --threshold (for CI use)",
+    )
     args = parser.parse_args()
 
     b = parse_bench(args.baseline)
@@ -101,6 +106,9 @@ def main():
 
     if not improvements and not regressions:
         print("No significant changes detected.")
+
+    if args.fail_on_regression and regressions:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
