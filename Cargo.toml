@@ -21,4 +21,9 @@ name = "hello"
 path = "tests/examples/hello.rs"
 harness = false
 
+[[test]]
+name = "stores"
+path = "tests/examples/stores.rs"
+harness = false
+
 [dependencies]

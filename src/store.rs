@@ -375,7 +375,20 @@ impl DataTernary {
     /// assert_eq!(data_ternary.to_dec(), 42);
     /// ```
     pub fn from_dec(from: i64) -> Self {
-        Self::from_ternary(Ternary::from_dec(from))
+        if from == 0 {
+            return Self { chunks: alloc::vec![TritsChunk::from_dec(0)] };
+        }
+        // Decompose into balanced base-243 (3^5) chunks directly, no Ternary alloc.
+        let mut n = from;
+        let mut chunks = alloc::vec::Vec::with_capacity(8);
+        while n != 0 {
+            let rem = ((n % 243) + 243) % 243;
+            let val: i8 = if rem <= 121 { rem as i8 } else { (rem - 243) as i8 };
+            n = (n - val as i64) / 243;
+            chunks.push(TritsChunk::from_dec(val));
+        }
+        chunks.reverse(); // built LSB-first, store MSB-first
+        Self { chunks }
     }
 
     /// Converts a `DataTernary` into its decimal representation.
@@ -673,7 +686,7 @@ impl Ter40 {
     /// Uses the same balanced-ternary decomposition as `Tryte::from_i64`:
     /// normalize remainder to {0,1,2} then map to balanced {0,1,−1}.
     #[inline]
-    fn to_raw(&self) -> [Digit; 40] {
+    fn to_raw(self) -> [Digit; 40] {
         let mut raw = [Digit::Zero; 40];
         let mut n = self.0;
         for i in (0..40).rev() {
@@ -1563,30 +1576,48 @@ const MASK_H: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 
 /// Spread the 32 bits of `x` to the even-indexed bit positions (0,2,4,...,62) of a u64.
 ///
-/// This is the standard "Morton code" interleave step. The inverse is `compact_u64`.
+/// On x86-64 with BMI2, this compiles to a single `PDEP` instruction.
+/// Otherwise falls back to the standard 5-step Morton code interleave.
+/// The inverse is `compact_u64`.
 #[inline(always)]
-const fn spread_u32(x: u32) -> u64 {
-    let mut x = x as u64;
-    x = (x | (x << 16)) & 0x0000_FFFF_0000_FFFF;
-    x = (x | (x <<  8)) & 0x00FF_00FF_00FF_00FF;
-    x = (x | (x <<  4)) & 0x0F0F_0F0F_0F0F_0F0F;
-    x = (x | (x <<  2)) & 0x3333_3333_3333_3333;
-    x = (x | (x <<  1)) & 0x5555_5555_5555_5555;
-    x
+fn spread_u32(x: u32) -> u64 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    // SAFETY: bmi2 is verified at compile time via target_feature.
+    return unsafe { core::arch::x86_64::_pdep_u64(x as u64, 0x5555_5555_5555_5555) };
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut x = x as u64;
+        x = (x | (x << 16)) & 0x0000_FFFF_0000_FFFF;
+        x = (x | (x <<  8)) & 0x00FF_00FF_00FF_00FF;
+        x = (x | (x <<  4)) & 0x0F0F_0F0F_0F0F_0F0F;
+        x = (x | (x <<  2)) & 0x3333_3333_3333_3333;
+        x = (x | (x <<  1)) & 0x5555_5555_5555_5555;
+        x
+    }
 }
 
 /// Compact the even-indexed bits (0,2,4,...,62) of `x` into a u32.
 ///
+/// On x86-64 with BMI2, this compiles to a single `PEXT` instruction.
+/// Otherwise falls back to the standard 6-step Morton code compact.
 /// Inverse of `spread_u32`.
 #[inline(always)]
-const fn compact_u64(x: u64) -> u32 {
-    let mut x = x & 0x5555_5555_5555_5555;
-    x = (x | (x >>  1)) & 0x3333_3333_3333_3333;
-    x = (x | (x >>  2)) & 0x0F0F_0F0F_0F0F_0F0F;
-    x = (x | (x >>  4)) & 0x00FF_00FF_00FF_00FF;
-    x = (x | (x >>  8)) & 0x0000_FFFF_0000_FFFF;
-    x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-    x as u32
+fn compact_u64(x: u64) -> u32 {
+    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
+    // SAFETY: bmi2 is verified at compile time via target_feature.
+    return unsafe { core::arch::x86_64::_pext_u64(x, 0x5555_5555_5555_5555) as u32 };
+
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+    {
+        let mut x = x & 0x5555_5555_5555_5555;
+        x = (x | (x >>  1)) & 0x3333_3333_3333_3333;
+        x = (x | (x >>  2)) & 0x0F0F_0F0F_0F0F_0F0F;
+        x = (x | (x >>  4)) & 0x00FF_00FF_00FF_00FF;
+        x = (x | (x >>  8)) & 0x0000_FFFF_0000_FFFF;
+        x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
+        x as u32
+    }
 }
 
 /// 32 balanced ternary trits packed into a **single `u64`** using 2 bits per trit.
@@ -1715,8 +1746,8 @@ impl IlBctTer32 {
     /// let il = IlBctTer32::from_bct(b);
     /// assert_eq!(il.to_dec(), 42);
     /// ```
-    #[inline]
-    pub const fn from_bct(bct: BctTer32) -> Self {
+    #[inline(always)]
+    pub fn from_bct(bct: BctTer32) -> Self {
         // Spread pos bits to odd positions (2k+1) and neg bits to even (2k).
         // Start from all-Zero (MASK_L = all 01).
         // Pos trits: set high bit, clear low bit → 10.
@@ -1736,8 +1767,8 @@ impl IlBctTer32 {
     /// let b  = il.to_bct();
     /// assert_eq!(b.to_dec(), -99);
     /// ```
-    #[inline]
-    pub const fn to_bct(&self) -> BctTer32 {
+    #[inline(always)]
+    pub fn to_bct(&self) -> BctTer32 {
         // For valid codes: 10=Pos (high=1,low=0), 01=Zero, 00=Neg (high=0,low=0).
         let high = (self.0 >> 1) & MASK_L; // high bits at even positions
         let low  =  self.0       & MASK_L; // low bits at even positions

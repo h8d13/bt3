@@ -8,6 +8,8 @@
 use crate::Ternary;
 #[cfg(feature = "tryte")]
 use crate::Tryte;
+#[cfg(feature = "tryte")]
+use alloc::{string::String, vec::Vec};
 
 /// Inverse lookup table: ASCII code → TERSCII value (0–80), or -1 if not mapped.
 ///
@@ -106,6 +108,58 @@ pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
     }
 }
 
+/// A TERSCII-encoded string: a sequence of [`Tryte<5>`] values, one per character.
+///
+/// Implements [`Display`] as space-separated balanced-ternary tryte representations.
+///
+/// # Example
+/// ```
+/// use balanced_ternary::terscii;
+/// let s = terscii::encode_str("Hi").unwrap();
+/// println!("{}", s); // "+0-+0 +-0-0" (H=75, i=7... wait, i=7 actually)
+/// let back = terscii::decode_str(&s).unwrap();
+/// assert_eq!(back, "Hi");
+/// ```
+#[cfg(feature = "tryte")]
+pub struct TersciiString(Vec<Tryte<5>>);
+
+#[cfg(feature = "tryte")]
+impl core::ops::Deref for TersciiString {
+    type Target = [Tryte<5>];
+    fn deref(&self) -> &Self::Target { &self.0 }
+}
+
+#[cfg(feature = "tryte")]
+impl core::fmt::Display for TersciiString {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut first = true;
+        for t in &self.0 {
+            if !first { f.write_str(" ")?; }
+            core::fmt::Display::fmt(t, f)?;
+            first = false;
+        }
+        Ok(())
+    }
+}
+
+/// Encode a string into a [`TersciiString`].
+///
+/// Returns `None` if any character is not in the TERSCII table.
+#[cfg(feature = "tryte")]
+#[inline]
+pub fn encode_str(s: &str) -> Option<TersciiString> {
+    s.chars().map(encode_tryte).collect::<Option<Vec<_>>>().map(TersciiString)
+}
+
+/// Decode a [`TersciiString`] (or `&[Tryte<5>]`) back to a [`String`].
+///
+/// Returns `None` if any value is outside 0–80.
+#[cfg(feature = "tryte")]
+#[inline]
+pub fn decode_str(trytes: &[Tryte<5>]) -> Option<String> {
+    trytes.iter().map(|&t| decode_tryte(t)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +214,19 @@ mod tests {
     #[test]
     fn test_table_length() {
         assert_eq!(TABLE.chars().count(), 81);
+    }
+
+    #[cfg(feature = "tryte")]
+    #[test]
+    fn test_encode_decode_str() {
+        let encoded = encode_str("Hello, World!").unwrap();
+        assert_eq!(encoded.len(), 13);
+        assert_eq!(decode_str(&encoded).unwrap(), "Hello, World!");
+    }
+
+    #[cfg(feature = "tryte")]
+    #[test]
+    fn test_encode_str_unknown() {
+        assert!(encode_str("Hello €").is_none());
     }
 }

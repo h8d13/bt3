@@ -461,10 +461,13 @@ impl<const SIZE: usize> Display for Tryte<SIZE> {
     /// padding. We now write each digit's char directly from the fixed-size
     /// array — zero allocations.
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        for d in &self.raw {
-            f.write_fmt(format_args!("{}", d.to_char()))?;
+        // Build on the stack (SIZE bytes), write once — zero heap, one write_str call.
+        let mut buf = [0u8; SIZE];
+        for (i, d) in self.raw.iter().enumerate() {
+            buf[i] = d.to_char() as u8;
         }
-        Ok(())
+        // SAFETY: '+', '-', '0' are all valid single-byte UTF-8.
+        f.write_str(unsafe { core::str::from_utf8_unchecked(&buf) })
     }
 }
 
