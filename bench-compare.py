@@ -57,7 +57,9 @@ def parse_divan(fname: str) -> dict[str, float]:
             name_col = parts[0]
             # Timing columns: fastest│slowest│median│mean│samples│iters
             # index:             1       2       3     4    5       6
-            median_col = parts[3] if len(parts) > 3 else ""
+            # Note: for leaf nodes the "fastest" value appears in the name
+            # column (parts[0]); parts[1]=slowest, parts[2]=median.
+            median_col = parts[2] if len(parts) > 2 else ""
 
             # Determine depth by counting '│' + '   ' groups before the tree char.
             # Each depth level is represented by "│  " (pipe + 2 spaces) or "   "
@@ -67,7 +69,9 @@ def parse_divan(fname: str) -> dict[str, float]:
                 continue
 
             depth_str, _tree_char, bench_name = prefix_match.groups()
-            bench_name = bench_name.strip()
+            # For leaf nodes Divan puts the "fastest" time in the name column,
+            # e.g. "10                      19.89 ns      ". Strip it off.
+            bench_name = re.sub(r'\s+[\d.]+\s*(?:ns|µs|us|ms|s)\s*$', '', bench_name).strip()
             if not bench_name:
                 continue
 
