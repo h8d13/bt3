@@ -1343,29 +1343,11 @@ impl BctTer32 {
     /// assert_eq!(BctTer32::from_dec(13).to_dec(), 13);
     /// assert_eq!(BctTer32::from_dec(-13).to_dec(), -13);
     /// ```
-    pub fn from_dec(v: i64) -> Self {
-        if v == 0 { return Self::ZERO; }
-        let negative = v < 0;
-        let mut x = v.unsigned_abs();
-        let mut pos = 0u32;
-        let mut neg = 0u32;
-        // SAFETY: unsigned single mod avoids ((n%3)+3)%3 double-mod pattern.
-        if !negative {
-            for bit in 0..32 {
-                let rem = (x % 3) as u8;
-                if rem == 1 { pos |= 1u32 << bit; }
-                else if rem == 2 { neg |= 1u32 << bit; }
-                x = (x - rem as u64) / 3 + (rem == 2) as u64;
-            }
-        } else {
-            for bit in 0..32 {
-                let rem = (x % 3) as u8;
-                if rem == 1 { neg |= 1u32 << bit; }
-                else if rem == 2 { pos |= 1u32 << bit; }
-                x = (x - rem as u64) / 3 + (rem == 2) as u64;
-            }
-        }
-        Self { pos, neg }
+    #[inline] pub fn from_dec(v: i64) -> Self {
+        // # Optimization: encode via IL then compact to split (pos, neg).
+        // IlBctTer32::from_dec uses UTER5_LUT (7 groups, no serial divmod).
+        // to_bct() is O(1) PEXT — replacing the two O(32) divmod loops.
+        IlBctTer32::from_dec(v).to_bct()
     }
 
     /// Convert the 32-trit BCT word back to a signed 64-bit integer.
@@ -1852,17 +1834,24 @@ impl IlBctTer32 {
     /// assert_eq!(IlBctTer32::from_dec(13).to_dec(), 13);
     /// assert_eq!(IlBctTer32::from_dec(-13).to_dec(), -13);
     /// ```
-    pub fn from_dec(v: i64) -> Self {
-        let mut word = 0u64;
-        let mut n = v;
-        for k in 0..32u32 {
-            let rem = ((n % 3) + 3) % 3;
-            let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
-            // -1 → 0b00 (0), 0 → 0b01 (1), +1 → 0b10 (2)
-            let code = (trit as i64 + 1) as u64;
-            word |= code << (2 * k);
-            n = (n - trit as i64) / 3;
-        }
+    #[inline] pub fn from_dec(v: i64) -> Self {
+        // # Optimization: 7-group UTER5_LUT (same pattern as BTer27::from_dec).
+        //
+        // Add BIAS to shift balanced range → unsigned 0..3^32−1, then split into
+        // 6 full 5-trit groups + 1 partial 2-trit group (6×5+2 = 32 trits).
+        // Each group is a single LUT lookup — no serial divmod chain.
+        // The 7th group value < 3^2 = 9; UTER5_LUT[0..8] encodes 2 trits correctly
+        // (upper 3 trit positions remain zero). The 10-bit LUT value shifted by 60
+        // naturally truncates to 4 bits within the u64 word.
+        const BIAS: i64 = 926_510_094_425_920; // (3^32 − 1) / 2
+        let n = (v + BIAS) as u64;
+        let word = (UTER5_LUT[(n % 243)                              as usize] as u64)
+                 | ((UTER5_LUT[((n /        243) % 243)              as usize] as u64) << 10)
+                 | ((UTER5_LUT[((n /      59049) % 243)              as usize] as u64) << 20)
+                 | ((UTER5_LUT[((n /   14348907) % 243)              as usize] as u64) << 30)
+                 | ((UTER5_LUT[((n / 3486784401) % 243)              as usize] as u64) << 40)
+                 | ((UTER5_LUT[((n / 847288609443) % 243)            as usize] as u64) << 50)
+                 | ((UTER5_LUT[(n / 205891132094649)                  as usize] as u64) << 60);
         Self(word)
     }
 

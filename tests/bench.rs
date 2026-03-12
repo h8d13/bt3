@@ -753,6 +753,12 @@ fn bench_libtern() {
     bench("BctTer32   → IlBctTer32 (spread,  O(1))", ITERS, || {
         std::hint::black_box(IlBctTer32::from_bct(std::hint::black_box(bct)));
     });
+    bench("IlBctTer32 from_dec (7-group UTER5_LUT, 32-trit)", ITERS, || {
+        std::hint::black_box(IlBctTer32::from_dec(std::hint::black_box(12_345_678i64)));
+    });
+    bench("BctTer32   from_dec (via IlBctTer32 + PEXT)", ITERS, || {
+        std::hint::black_box(BctTer32::from_dec(std::hint::black_box(12_345_678i64)));
+    });
     bench("IlBctTer32 il_neg (Jones MASK_H−self, 32-trit)", ITERS, || {
         std::hint::black_box(std::hint::black_box(il).il_neg());
     });
