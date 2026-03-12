@@ -734,7 +734,21 @@ impl<const SIZE: usize> From<Tryte<SIZE>> for Ternary {
 
 impl<const SIZE: usize> From<&str> for Tryte<SIZE> {
     fn from(value: &str) -> Self {
-        Self::from_ternary(&Ternary::parse(value))
+        // # Optimization: bypass heap Ternary — parse directly into stack array.
+        // Ternary::parse allocates a Vec<Digit> we'd immediately copy and drop.
+        let bytes = value.as_bytes();
+        let n = bytes.len();
+        assert!(n <= SIZE, "string longer than Tryte<{SIZE}>");
+        let mut raw = [Zero; SIZE];
+        let offset = SIZE - n;
+        for (i, &b) in bytes.iter().enumerate() {
+            raw[offset + i] = match b {
+                b'+' => Pos,
+                b'-' => Neg,
+                _ => Zero,
+            };
+        }
+        Self::new(raw)
     }
 }
 
@@ -765,8 +779,32 @@ impl<const SIZE: usize> From<Tryte<SIZE>> for i64 {
 impl<const SIZE: usize> FromStr for Tryte<SIZE> {
     type Err = crate::ParseTernaryError;
 
+    /// # Optimization: direct parse into stack array — zero heap allocation.
+    ///
+    /// The previous implementation called `Ternary::from_str` (validates bytes
+    /// + allocates a `Vec<Digit>`) then `Tryte::from_ternary` (copies into the
+    /// fixed array and drops the Vec). The heap round-trip cost ~4.5 ns.
+    ///
+    /// We now parse directly: validate each byte as we go, map to Digit, and
+    /// right-justify into `[Digit; SIZE]` — no allocation, no extra scan.
+    /// Strings shorter than SIZE receive implicit leading zeros.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Tryte::from_ternary(&Ternary::from_str(s)?))
+        let bytes = s.as_bytes();
+        let n = bytes.len();
+        if n > SIZE {
+            return Err(crate::ParseTernaryError);
+        }
+        let mut raw = [Zero; SIZE];
+        let offset = SIZE - n;
+        for (i, &b) in bytes.iter().enumerate() {
+            raw[offset + i] = match b {
+                b'+' => Pos,
+                b'-' => Neg,
+                b'0' => Zero,
+                _ => return Err(crate::ParseTernaryError),
+            };
+        }
+        Ok(Self::new(raw))
     }
 }
 

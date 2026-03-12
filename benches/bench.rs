@@ -235,6 +235,11 @@ mod tryte {
     }
 
     #[divan::bench]
+    fn parse_str(b: divan::Bencher) {
+        b.bench(|| divan::black_box("+0-+0-").parse::<Tryte>().unwrap())
+    }
+
+    #[divan::bench]
     fn to_string(b: divan::Bencher) {
         let t = tryte("+0-+0-");
         b.bench(|| t.to_string())
