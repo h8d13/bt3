@@ -9,9 +9,6 @@
 //!
 //! After changes, compare with the Python script:
 //!   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-new.txt
-//!   python3 bench-compare.py bench-baseline.txt bench-new.txt
-//!
-//! Options: --top N (show top N), --threshold PCT (min %% to report), --min-ns NS (noise floor)
 
 use balanced_ternary::concepts::DigitOperate;
 use balanced_ternary::terscii;
@@ -374,8 +371,11 @@ fn bench_tryte() {
     println!("  TRYTE");
     println!("============================================================");
 
-    bench("tryte() from str", ITERS, || {
+    bench("tryte() from str (public helper)", ITERS, || {
         std::hint::black_box(tryte(std::hint::black_box("+0-+0-")));
+    });
+    bench("Tryte::parse (FromStr trait, direct no-alloc)", ITERS, || {
+        std::hint::black_box(std::hint::black_box("+0-+0-").parse::<Tryte>().unwrap());
     });
 
     let t = tryte("+0-+0-");
@@ -620,11 +620,14 @@ fn bench_libtern() {
     let u9a = UTer9::from_dec(12345);
     let u9b = UTer9::from_dec(6789);
 
-    bench("UTer9  uter_add  (Jones O(1) BCT trick)", ITERS, || {
+    bench("UTer9  uter_add       (Jones O(1) BCT trick)", ITERS, || {
         std::hint::black_box(std::hint::black_box(u9a).uter_add(std::hint::black_box(u9b)));
     });
     bench("UTer9  +  (via uter_add)", ITERS, || {
         std::hint::black_box(std::hint::black_box(u9a) + std::hint::black_box(u9b));
+    });
+    bench("UTer9  uter_add_carry (Jones O(1) + carry-out)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(u9a).uter_add_carry(std::hint::black_box(u9b), UTer9::ZERO));
     });
     bench("UTer9  uter_sub  (Jones 3s-complement)", ITERS, || {
         std::hint::black_box(std::hint::black_box(u9a).uter_sub(std::hint::black_box(u9b)));
@@ -651,8 +654,14 @@ fn bench_libtern() {
     let u27a = UTer27::from_dec(1_234_567_890);
     let u27b = UTer27::from_dec(987_654_321);
 
-    bench("UTer27 uter_add  (Jones O(1) BCT trick)", ITERS, || {
+    bench("UTer27 uter_add       (Jones O(1) BCT trick)", ITERS, || {
         std::hint::black_box(std::hint::black_box(u27a).uter_add(std::hint::black_box(u27b)));
+    });
+    bench("UTer27 +  (via uter_add)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(u27a) + std::hint::black_box(u27b));
+    });
+    bench("UTer27 uter_add_carry (Jones O(1) + carry-out)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(u27a).uter_add_carry(std::hint::black_box(u27b), UTer27::ZERO));
     });
     bench("UTer27 uter_sub  (Jones 3s-complement)", ITERS, || {
         std::hint::black_box(std::hint::black_box(u27a).uter_sub(std::hint::black_box(u27b)));
@@ -878,9 +887,12 @@ fn bench_ilter40() {
         std::hint::black_box(ab | c);
     });
 
-    println!("\n--- Arithmetic: add ---");
+    println!("\n--- Arithmetic: add / sub ---");
     bench("IlTer40  + (Jones biased-uter, O(1))", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_il40) + std::hint::black_box(b_il40));
+    });
+    bench("IlTer40  - (neg + Jones biased-uter, O(1))", ITERS, || {
+        std::hint::black_box(std::hint::black_box(a_il40) - std::hint::black_box(b_il40));
     });
     bench("Ter40    + (direct i64, O(1))", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_t40) + std::hint::black_box(b_t40));
@@ -999,4 +1011,49 @@ fn bench_terscii() {
             std::hint::black_box(terscii::balanced_str(std::hint::black_box(&hello)));
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+/// Getrandom: syscall-backed vs SplitMix64 PRNG random ternary values.
+#[test]
+fn bench_getrandom() {
+    use balanced_ternary::getrandom::*;
+
+    println!("\n============================================================");
+    println!("  GETRANDOM — syscall vs SplitMix64 PRNG");
+    println!("============================================================");
+    println!("  Syscall variants: ~180-200 ns each (one getrandom(2) per call)");
+    println!("  SplitMix64 variants: ~2-4 ns (seeded once, pure arithmetic)");
+
+    println!("\n--- Syscall-backed (one kernel call per value) ---");
+    bench("rand_digit()         (1 syscall, rejection loop)", ITERS / 100, || {
+        std::hint::black_box(rand_digit());
+    });
+    bench("rand_bter9()         (1 syscall, rejection loop)", ITERS / 100, || {
+        std::hint::black_box(rand_bter9());
+    });
+    bench("rand_bter27()        (1 syscall, rejection loop)", ITERS / 100, || {
+        std::hint::black_box(rand_bter27());
+    });
+    bench("rand_uter27()        (1 syscall, rejection loop)", ITERS / 100, || {
+        std::hint::black_box(rand_uter27());
+    });
+
+    println!("\n--- SplitMix64 PRNG (seeded once, no syscall per call) ---");
+    let mut rng = SplitMix64::new();
+    bench("SplitMix64::next_u64 (pure arithmetic, no syscall)", ITERS, || {
+        std::hint::black_box(rng.next_u64());
+    });
+    let mut rng = SplitMix64::new();
+    bench("SplitMix64::rand_bter9()  (~0 ns PRNG + from_dec)", ITERS, || {
+        std::hint::black_box(rng.rand_bter9());
+    });
+    let mut rng = SplitMix64::new();
+    bench("SplitMix64::rand_bter27() (~0 ns PRNG + from_dec)", ITERS, || {
+        std::hint::black_box(rng.rand_bter27());
+    });
+    let mut rng = SplitMix64::new();
+    bench("SplitMix64::rand_uter27() (~0 ns PRNG + from_dec)", ITERS, || {
+        std::hint::black_box(rng.rand_uter27());
+    });
 }
