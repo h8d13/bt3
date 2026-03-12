@@ -409,12 +409,38 @@ impl Ternary {
     ///
     /// This is exactly **one multiply + one add per digit**, O(n) total,
     /// and iterates in natural (MSB-first) storage order — no `.rev()`.
+    ///
+    /// # Optimization: two-way Horner for ILP
+    ///
+    /// The digit array is split into even- and odd-indexed chains, each
+    /// evaluated in base 9 (= 3²) independently. The OOO CPU can overlap
+    /// the two chains; result = even_chain * 3 + odd_chain.
+    /// For an odd-length input, the first digit is consumed separately.
     pub fn to_dec(&self) -> i64 {
-        let mut dec: i64 = 0;
-        for digit in self.digits.iter() {
-            dec = dec * 3 + digit.to_i8() as i64;
+        let d = &self.digits;
+        let n = d.len();
+        if n == 0 { return 0; }
+        // Two-way Horner: process pairs (d[i], d[i+1]) advancing even and odd
+        // chains simultaneously in base 9. The OOO CPU can overlap the two
+        // independent multiply-add chains.
+        // Even chain (a): d[0], d[2], d[4], ...
+        // Odd chain  (b): d[1], d[3], d[5], ...
+        // n even → result = a*3 + b;  n odd → trailing d[n-1] goes into a, result = a + b*3.
+        let mut a: i64 = 0;
+        let mut b: i64 = 0;
+        let mut i = 0usize;
+        while i + 1 < n {
+            a = a * 9 + d[i    ].to_i8() as i64;
+            b = b * 9 + d[i + 1].to_i8() as i64;
+            i += 2;
         }
-        dec
+        if n & 1 == 1 {
+            // One trailing even-indexed element
+            a = a * 9 + d[n - 1].to_i8() as i64;
+            a + b * 3
+        } else {
+            a * 3 + b
+        }
     }
 
     /// Creates a balanced ternary number from a decimal integer.
