@@ -2514,20 +2514,6 @@ const UTER5_LUT: [u16; 243] = {
     lut
 };
 
-/// Precomputed 3-trit BCT decoding: `UTER3_DEC_LUT[c]` = decimal value (0..26)
-/// of the 3-trit BCT word `c` (6 bits, trit k occupies bits `2k..2k+2`).
-///
-/// Invalid codes (any 2-bit pair == 11) are never indexed by valid `UTer9`/`UTer27` values.
-const UTER3_DEC_LUT: [u8; 64] = {
-    let mut lut = [0u8; 64];
-    let mut c = 0usize;
-    while c < 64 {
-        lut[c] = (((c >> 4) & 3) * 9 + ((c >> 2) & 3) * 3 + (c & 3)) as u8;
-        c += 1;
-    }
-    lut
-};
-
 // =========================================================================
 // UTer9 — 9-trit unsigned ternary (uter9_t), range 0..19682
 // =========================================================================
@@ -2559,12 +2545,25 @@ impl UTer9 {
     }
 
     #[inline] pub fn to_dec(&self) -> u32 {
-        // Three 3-trit LUT lookups (6 bits each) + two multiplies instead of
-        // a 9-step serial Horner chain. LLVM can schedule all three loads in parallel.
-        let lo  = UTER3_DEC_LUT[(self.0 & 0x3F) as usize] as u32;
-        let mid = UTER3_DEC_LUT[((self.0 >> 6) & 0x3F) as usize] as u32;
-        let hi  = UTER3_DEC_LUT[(self.0 >> 12) as usize] as u32;
-        lo + mid * 27 + hi * 729
+        // Jones parallel ternary→binary reduction for 9 trits (18 bits in u32).
+        // 4-stage log-depth fold: no LUT, pure arithmetic, ILP-friendly.
+        let ta = self.0;
+        // Stage 1: combine pairs of 2-bit trits → 4-bit decimal (0..8)
+        let acc  = ta & 0x0003_3333u32;
+        let high = (ta >> 2) & 0x0003_3333u32;
+        let acc  = acc + 3 * high;
+        // Stage 2: combine 4-bit pairs → 8-bit decimal (0..80)
+        let high = (acc >> 4) & 0x0003_0F0Fu32;
+        let acc  = acc        & 0x0003_0F0Fu32;
+        let acc  = acc + 9 * high;
+        // Stage 3: combine 8-bit pairs → 16-bit decimal (0..6560)
+        let high = (acc >> 8) & 0x0003_00FFu32;
+        let acc  = acc        & 0x0003_00FFu32;
+        let acc  = acc + 81 * high;
+        // Stage 4: combine 16-bit halves → final result
+        let high = (acc >> 16) & 0x0000_FFFFu32;
+        let acc  = acc         & 0x0000_FFFFu32;
+        acc + 6_561 * high
     }
 
     #[inline(always)] pub const fn raw(self) -> u32 { self.0 }
@@ -2668,12 +2667,30 @@ impl UTer27 {
     }
 
     #[inline] pub fn to_dec(&self) -> u64 {
-        // Split into three independent 9-trit groups — same ILP trick as BTer27::to_dec.
-        // Each group calls the LUT-based UTer9::to_dec (3 lookups + 2 muls).
-        let lo  = UTer9((self.0 & MASK9 as u64) as u32).to_dec() as u64;
-        let mid = UTer9(((self.0 >> 18) & MASK9 as u64) as u32).to_dec() as u64;
-        let hi  = UTer9((self.0 >> 36) as u32).to_dec() as u64;
-        lo + mid * 19_683u64 + hi * 387_420_489u64
+        // Jones parallel ternary→binary reduction (D.W. Jones, libternary 2015).
+        // 5-stage log-depth fold: no LUT, pure arithmetic, ILP-friendly.
+        // Each stage halves the number of active groups by combining adjacent pairs.
+        let ta = self.0;
+        // Stage 1: combine pairs of 2-bit trits → 4-bit decimal (0..8)
+        let acc  = ta & 0x0033_3333_3333_3333u64;
+        let high = (ta >> 2) & 0x0033_3333_3333_3333u64;
+        let acc  = acc + 3 * high;
+        // Stage 2: combine 4-bit pairs → 8-bit decimal (0..80)
+        let high = (acc >> 4) & 0x000F_0F0F_0F0F_0F0Fu64;
+        let acc  = acc        & 0x000F_0F0F_0F0F_0F0Fu64;
+        let acc  = acc + 9 * high;
+        // Stage 3: combine 8-bit pairs → 16-bit decimal (0..6560)
+        let high = (acc >> 8) & 0x003F_00FF_00FF_00FFu64;
+        let acc  = acc        & 0x003F_00FF_00FF_00FFu64;
+        let acc  = acc + 81 * high;
+        // Stage 4: combine 16-bit pairs → 32-bit decimal (0..43 046 720)
+        let high = (acc >> 16) & 0x0000_FFFF_0000_FFFFu64;
+        let acc  = acc         & 0x0000_FFFF_0000_FFFFu64;
+        let acc  = acc + 6_561 * high;
+        // Stage 5: combine 32-bit halves → final result
+        let high = acc >> 32;
+        let acc  = acc & 0x0000_0000_FFFF_FFFFu64;
+        acc + 43_046_721 * high
     }
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
@@ -2888,13 +2905,10 @@ impl BTer27 {
     }
 
     #[inline] pub fn to_dec(&self) -> i64 {
-        // Three independent 9-trit groups — LLVM schedules all three Horner
-        // chains in parallel via ILP instead of one serial 27-step chain.
-        let w = self.0;
-        let lo  = BTer9((w         & MASK9 as u64) as u32).to_dec() as i64;
-        let mid = BTer9(((w >> 18) & MASK9 as u64) as u32).to_dec() as i64;
-        let hi  = BTer9(((w >> 36) & MASK9 as u64) as u32).to_dec() as i64;
-        lo + mid * 19683 + hi * (19683 * 19683)
+        // Jones: bter27_to_int = uter27_to_int(a) - BIAS.
+        // Reuse UTer27's 5-stage parallel reduction, then subtract bias.
+        const BIAS: u64 = 3_812_798_742_493; // (3^27 - 1) / 2
+        UTer27(self.0).to_dec().wrapping_sub(BIAS) as i64
     }
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
