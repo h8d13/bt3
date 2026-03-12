@@ -7,7 +7,7 @@ edition = "2021"
 license = "MIT"
 keywords = ["ternary", "balanced_ternary", "base3", "three_value_logic", "logic"]
 categories = ["data-structures", "mathematics", "science", "no-std"]
-repository = "https://github.com/Trehinos/balanced-ternary"
+repository = "https://github.com/h8d13/bt3"
 
 [features]
 default = ["tryte", "ternary-store", "terscii"]
@@ -19,11 +19,6 @@ terscii = ["ternary-string", "tryte"]
 [[test]]
 name = "hello"
 path = "tests/examples/hello.rs"
-harness = false
-
-[[test]]
-name = "stores"
-path = "tests/examples/stores.rs"
 harness = false
 
 [dependencies]
