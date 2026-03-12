@@ -2391,16 +2391,7 @@ const MASK27_H: u64 = 0x002A_AAAA_AAAA_AAAA; // high bits of 27 pairs
 // Shared bit-manipulation helpers (same logical formulas, different masks)
 // -------------------------------------------------------------------------
 
-/// Interleaved BCT trit-wise negation for a u32 word with `mask_l` as the
-/// low-bit mask.  Maps 00↔10, preserves 01.
-#[inline(always)]
-const fn il_neg_u32(w: u32, mask_l: u32) -> u32 {
-    let h = (w >> 1) & mask_l;
-    let l =  w       & mask_l;
-    ((!(h | l) & mask_l) << 1) | (!h & l & mask_l)
-}
-
-/// Same for u64.
+/// Same for u64 (u32 variant removed — BTer9 uses MASK9_H - self.0 directly).
 #[inline(always)]
 const fn il_neg_u64(w: u64, mask_l: u64) -> u64 {
     let h = (w >> 1) & mask_l;
