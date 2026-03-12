@@ -21,4 +21,11 @@ name = "hello"
 path = "tests/examples/hello.rs"
 harness = false
 
+[[bench]]
+name = "bench"
+harness = false
+
+[dev-dependencies]
+divan = "0.1"
+
 [dependencies]

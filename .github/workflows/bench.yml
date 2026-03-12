@@ -18,7 +18,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ubuntu-latest ships with Rust stable — no extra action needed.
       - name: Update Rust
         run: rustup update stable && rustup default stable
 
@@ -32,7 +31,7 @@ jobs:
 
       - name: Run benchmarks (single-threaded)
         run: |
-          cargo test --release --test bench -- --nocapture --test-threads=1 \
+          cargo bench -- --threads=1 \
             2>&1 | tee bench-ci-new.txt
 
       - name: Compare against baseline
@@ -47,6 +46,7 @@ jobs:
             echo "No baseline — this run becomes the new baseline."
             cp bench-ci-new.txt bench-ci-diff.txt
           fi
+
       # Update stored baseline only on master pushes.
       - name: Save baseline cache
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/master'
