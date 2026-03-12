@@ -935,40 +935,54 @@ fn bench_terscii() {
         std::hint::black_box(terscii::decode(std::hint::black_box(&space)));
     });
 
-    println!("\n--- encode_tryte (Tryte<5>, no heap) ---");
-    bench("terscii::encode_tryte('H')  [end of table]", ITERS, || {
-        std::hint::black_box(terscii::encode_tryte(std::hint::black_box('H')));
+    println!("\n--- encode_code (TersciiCode BCT4, O(1) LUT) ---");
+    bench("terscii::encode_code('H')  [end of table]", ITERS, || {
+        std::hint::black_box(terscii::encode_code(std::hint::black_box('H')));
     });
-    bench("terscii::encode_tryte(' ')  [near start]", ITERS, || {
-        std::hint::black_box(terscii::encode_tryte(std::hint::black_box(' ')));
+    bench("terscii::encode_code(' ')  [near start]", ITERS, || {
+        std::hint::black_box(terscii::encode_code(std::hint::black_box(' ')));
     });
 
-    println!("\n--- decode_tryte (Tryte<5>, no heap) ---");
-    let th = terscii::encode_tryte('H').unwrap();
-    let ts = terscii::encode_tryte(' ').unwrap();
-    bench("terscii::decode_tryte(75='H')", ITERS, || {
-        std::hint::black_box(terscii::decode_tryte(std::hint::black_box(th)));
+    println!("\n--- decode_code (TersciiCode BCT4, O(1) LUT) ---");
+    let ch = terscii::encode_code('H').unwrap();
+    let cs = terscii::encode_code(' ').unwrap();
+    bench("terscii::decode_code(75='H')", ITERS, || {
+        std::hint::black_box(terscii::decode_code(std::hint::black_box(ch)));
     });
-    bench("terscii::decode_tryte(1=' ')", ITERS, || {
-        std::hint::black_box(terscii::decode_tryte(std::hint::black_box(ts)));
+    bench("terscii::decode_code(1=' ')", ITERS, || {
+        std::hint::black_box(terscii::decode_code(std::hint::black_box(cs)));
     });
 
     println!("\n--- roundtrip ---");
-    bench("Ternary  encode+decode single char", ITERS, || {
+    bench("Ternary      encode+decode single char", ITERS, || {
         let t = terscii::encode(std::hint::black_box('H')).unwrap();
         std::hint::black_box(terscii::decode(&t));
     });
-    bench("Tryte<5> encode+decode single char", ITERS, || {
-        let t = terscii::encode_tryte(std::hint::black_box('H')).unwrap();
-        std::hint::black_box(terscii::decode_tryte(t));
+    bench("TersciiCode  encode+decode single char", ITERS, || {
+        let t = terscii::encode_code(std::hint::black_box('H')).unwrap();
+        std::hint::black_box(terscii::decode_code(std::hint::black_box(t)));
     });
-    bench("Tryte<5> encode+decode \"Hello, World!\"", ITERS / 10, || {
-        let encoded: Vec<Tryte<5>> = "Hello, World!".chars()
-            .map(|c| terscii::encode_tryte(c).unwrap())
+    bench("TersciiCode  encode+decode \"Hello, World!\" (2 allocs)", ITERS / 10, || {
+        let encoded: Vec<terscii::TersciiCode> = "Hello, World!".chars()
+            .map(|c| terscii::encode_code(c).unwrap())
             .collect();
         let decoded: String = encoded.iter()
-            .map(|&t| terscii::decode_tryte(t).unwrap())
+            .map(|&c| terscii::decode_code(c).unwrap())
             .collect();
         std::hint::black_box(decoded);
+    });
+    bench("TersciiCode  encode_str+decode_codes    (2 allocs, direct write)", ITERS / 10, || {
+        let encoded = terscii::encode_str(std::hint::black_box("Hello, World!")).unwrap();
+        let decoded = terscii::decode_codes(std::hint::black_box(&encoded)).unwrap();
+        std::hint::black_box(decoded);
+    });
+    bench("TersciiCode  encode+decode no-alloc (stack [u8;13])", ITERS, || {
+        let src = std::hint::black_box(b"Hello, World!");
+        let mut buf = [0u8; 13];
+        for i in 0..13 {
+            let code = terscii::encode_code(src[i] as char).unwrap();
+            buf[i] = terscii::decode_code(code).unwrap() as u8;
+        }
+        std::hint::black_box(buf);
     });
 }

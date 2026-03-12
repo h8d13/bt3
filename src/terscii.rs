@@ -3,13 +3,14 @@
 //! A 9×9 character table (81 values, 4 trits each) designed for ternary computing.
 //! See <https://homepage.divms.uiowa.edu/~jones/ternary/terscii.shtml>
 //!
-//! Each character maps to a value 0–80 represented as a [`Ternary`] number.
+//! Each character maps to a value 0–80, which is a 4-trit **unbalanced** ternary number.
+//! The natural representation is [`TersciiCode`]: 4 trits in BCT (binary-coded ternary),
+//! 2 bits per trit, stored in a `u8`. This gives symmetric O(1) encode/decode.
+//!
+//! For balanced-ternary arithmetic contexts, the value can also be converted to a
+//! [`Ternary`] or [`Tryte<5>`] representation, but those are secondary encodings.
 
 use crate::Ternary;
-#[cfg(feature = "tryte")]
-use crate::Tryte;
-#[cfg(feature = "tryte")]
-use alloc::{string::String, vec::Vec};
 
 /// Inverse lookup table: ASCII code → TERSCII value (0–80), or -1 if not mapped.
 ///
@@ -48,6 +49,117 @@ pub const TABLE: &str =
     "\x00 09IR_ir\x01-1AJSajs\x02'2BKTbkt\x03,3CLUclu\
      \x04;4DMVdmv\x05:5ENWenw\x06.6FOXfox\x07!7GPYgpy\x08?8HQZhqz";
 
+/// A TERSCII character in its natural 4-trit BCT (binary-coded ternary) representation.
+///
+/// Each of the 4 trits occupies a 2-bit pair: `00` = 0, `01` = 1, `10` = 2.
+/// Layout: `t3 t2 t1 t0` (MSB first) packs into bits `[7:6][5:4][3:2][1:0]`.
+/// Valid values: 0x00–0xAA (decimal 0–80, i.e. `0000₃`–`2222₃`).
+///
+/// This is the representation described in the TERSCII spec.
+/// Use [`encode_code`] / [`decode_code`] for O(1) symmetric conversion.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Debug, Default)]
+pub struct TersciiCode(u8);
+
+impl TersciiCode {
+    /// Returns the raw BCT4 byte.
+    #[inline] pub const fn raw(self) -> u8 { self.0 }
+
+    /// Constructs from a raw BCT4 byte without validity check.
+    ///
+    /// # Safety
+    /// Caller must ensure no 2-bit group equals `11` (invalid BCT trit),
+    /// and that the decimal value of the code is in 0–80.
+    #[inline] pub const unsafe fn from_raw_unchecked(raw: u8) -> Self { Self(raw) }
+
+    /// Extracts the four unbalanced ternary digits `[t3, t2, t1, t0]` (each 0–2).
+    #[inline]
+    pub const fn digits(self) -> [u8; 4] {
+        [
+            (self.0 >> 6) & 3,
+            (self.0 >> 4) & 3,
+            (self.0 >> 2) & 3,
+             self.0       & 3,
+        ]
+    }
+}
+
+impl core::fmt::Display for TersciiCode {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let d = self.digits();
+        write!(f, "{}{}{}{}", d[0], d[1], d[2], d[3])
+    }
+}
+
+/// Converts a TERSCII decimal value 0–80 to its 4-trit BCT u8.
+const fn dec_to_bct4(v: u8) -> u8 {
+    let t3 = v / 27;
+    let t2 = (v % 27) / 9;
+    let t1 = (v % 9) / 3;
+    let t0 = v % 3;
+    (t3 << 6) | (t2 << 4) | (t1 << 2) | t0
+}
+
+/// ASCII code → TERSCII BCT4 raw byte (0xFF = not in TERSCII table).
+///
+/// Combines ENCODE_LUT + BCT4 conversion in a single precomputed 128-byte table.
+const ENCODE_CODE_LUT: [u8; 128] = {
+    let mut lut = [0xFFu8; 128];
+    let mut i = 0usize;
+    while i < 128 {
+        let v = ENCODE_LUT[i];
+        if v >= 0 {
+            lut[i] = dec_to_bct4(v as u8);
+        }
+        i += 1;
+    }
+    lut
+};
+
+/// TERSCII BCT4 raw byte → ASCII byte (0xFF = invalid BCT or out of range).
+///
+/// Entries for all 81 valid TERSCII BCT4 values are set from [`TABLE`].
+/// All other entries (invalid BCT patterns where any 2-bit group = `11`, or values
+/// beyond 0xAA) remain 0xFF.
+const DECODE_CODE_LUT: [u8; 256] = {
+    let mut lut = [0xFFu8; 256];
+    let table = TABLE.as_bytes();
+    let mut v = 0usize;
+    while v < 81 {
+        lut[dec_to_bct4(v as u8) as usize] = table[v];
+        v += 1;
+    }
+    lut
+};
+
+/// Encode a character to its TERSCII value as a [`TersciiCode`] (4-trit BCT, O(1)).
+///
+/// Returns `None` if the character is not in the TERSCII table.
+///
+/// # Performance
+/// Single `ENCODE_CODE_LUT` lookup — symmetric with [`decode_code`].
+#[inline]
+pub fn encode_code(c: char) -> Option<TersciiCode> {
+    let code = c as u32;
+    if code < 128 {
+        let raw = ENCODE_CODE_LUT[code as usize];
+        if raw != 0xFF { Some(TersciiCode(raw)) } else { None }
+    } else {
+        None
+    }
+}
+
+/// Decode a [`TersciiCode`] back to its character (O(1) single LUT lookup).
+///
+/// Returns `None` if the raw value contains an invalid BCT trit (any 2-bit pair = `11`).
+///
+/// # Performance
+/// Single `DECODE_CODE_LUT` lookup — symmetric with [`encode_code`].
+#[inline]
+pub fn decode_code(code: TersciiCode) -> Option<char> {
+    let byte = DECODE_CODE_LUT[code.0 as usize];
+    if byte != 0xFF { Some(byte as char) } else { None }
+}
+
 /// Encode a character to its TERSCII [`Ternary`] value (0–80).
 ///
 /// Returns `None` if the character is not in the TERSCII table.
@@ -77,125 +189,38 @@ pub fn decode(t: &Ternary) -> Option<char> {
     }
 }
 
-/// Precomputed `Tryte<5>` for each TERSCII value 0–80.
-///
-/// Eliminates `from_i64` (5 divisions per call) in the hot path of `encode_tryte`.
-#[cfg(feature = "tryte")]
-const TRYTE5_LUT: [Tryte<5>; 81] = {
-    let mut lut = [Tryte::<5>::ZERO; 81];
-    let mut i = 0usize;
-    while i < 81 {
-        lut[i] = Tryte::<5>::from_i64(i as i64);
-        i += 1;
-    }
-    lut
-};
-
-/// Encode a character to its TERSCII value as a [`Tryte<5>`] (stack-allocated, no heap).
-///
-/// TERSCII uses 4-trit quartets (3⁴ = 81 values), but balanced ternary `Tryte<4>` only
-/// reaches ±40, so `Tryte<5>` (range ±121) is required to cover the full 0–80 range.
-#[cfg(feature = "tryte")]
-#[inline]
-pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
-    let code = c as u32;
-    if code < 128 {
-        let v = ENCODE_LUT[code as usize];
-        if v >= 0 { Some(TRYTE5_LUT[v as usize]) } else { None }
-    } else {
-        None
-    }
-}
-
-/// Decode a [`Tryte<5>`] TERSCII value back to a character.
-///
-/// Returns `None` if the value is outside 0–80.
-/// Uses parallel constant multiplications (no serial Horner dependency chain)
-/// to compute the decimal value, then a single unsigned bounds check (`v < 81`
-/// after casting, which subsumes the `>= 0` check) before the `TABLE` lookup.
-#[cfg(feature = "tryte")]
-#[inline]
-pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
-    let raw = t.to_digit_slice();
-    let v = raw[0] as i8 as i64 * 81
-          + raw[1] as i8 as i64 * 27
-          + raw[2] as i8 as i64 * 9
-          + raw[3] as i8 as i64 * 3
-          + raw[4] as i8 as i64;
-    if v >= 0 && (v as usize) < 81 {
-        Some(TABLE.as_bytes()[v as usize] as char)
-    } else {
-        None
-    }
-}
-
-/// A TERSCII-encoded string: a sequence of [`Tryte<5>`] values, one per character.
-///
-/// Implements [`Display`] as space-separated balanced-ternary tryte representations.
-/// ```
-#[cfg(feature = "tryte")]
-pub struct TersciiString(Vec<Tryte<5>>);
-
-#[cfg(feature = "tryte")]
-impl core::ops::Deref for TersciiString {
-    type Target = [Tryte<5>];
-    fn deref(&self) -> &Self::Target { &self.0 }
-}
-
-#[cfg(feature = "tryte")]
-impl core::fmt::Display for TersciiString {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut first = true;
-        for t in &self.0 {
-            if !first { f.write_str(" ")?; }
-            core::fmt::Display::fmt(t, f)?;
-            first = false;
-        }
-        Ok(())
-    }
-}
-
-/// Encode a string into a [`TersciiString`].
+/// Encode a string into a `Vec` of [`TersciiCode`]s.
 ///
 /// Returns `None` if any character is not in the TERSCII table.
 ///
-/// # Optimization: bytes() + pre-allocated Vec
-///
-/// TERSCII only accepts ASCII characters (code points < 128). Using
-/// `bytes()` instead of `chars()` avoids UTF-8 multi-byte decode overhead
-/// and provides an exact size_hint so the Vec is pre-allocated once.
-/// Non-ASCII bytes still return `None` because `encode_tryte` rejects any
-/// input ≥ 128 via the `ENCODE_LUT` bounds check.
-#[cfg(feature = "tryte")]
+/// Uses `bytes()` (TERSCII is ASCII-only) and pre-allocates the Vec once.
 #[inline]
-pub fn encode_str(s: &str) -> Option<TersciiString> {
-    let mut v = Vec::with_capacity(s.len());
+pub fn encode_str(s: &str) -> Option<alloc::vec::Vec<TersciiCode>> {
+    let mut v = alloc::vec::Vec::with_capacity(s.len());
     for b in s.bytes() {
-        v.push(encode_tryte(b as char)?);
+        if b >= 128 { return None; }
+        let raw = ENCODE_CODE_LUT[b as usize];
+        if raw == 0xFF { return None; }
+        v.push(TersciiCode(raw));
     }
-    Some(TersciiString(v))
+    Some(v)
 }
 
-/// Decode a [`TersciiString`] (or `&[Tryte<5>]`) back to a [`String`].
+/// Decode a slice of [`TersciiCode`]s back to a `String`.
 ///
-/// Returns `None` if any value is outside 0–80.
+/// Returns `None` if any code contains an invalid BCT trit (2-bit group = `11`).
 ///
-/// # Optimization: pre-allocated String + direct byte write
-///
-/// All TERSCII characters are ASCII (code points 0–80, all < 128), so the
-/// output String always has exactly one byte per tryte. Pre-allocating with
-/// the exact capacity and writing bytes directly avoids the UTF-8 encode
-/// overhead of `String::push(char)` and any reallocation.
-#[cfg(feature = "tryte")]
+/// Pre-allocates the exact capacity and writes bytes directly, bypassing
+/// `char::encode_utf8` — valid because all TERSCII chars are single-byte ASCII.
 #[inline]
-pub fn decode_str(trytes: &[Tryte<5>]) -> Option<String> {
-    let mut s = String::with_capacity(trytes.len());
-    for &t in trytes {
-        // SAFETY: all TERSCII chars are ASCII (TABLE contains only bytes
-        // in 0x00–0x7A), so casting the char to u8 preserves its value and
-        // the resulting byte sequence is valid UTF-8.
-        let c = decode_tryte(t)? as u8;
-        unsafe { s.as_mut_vec().push(c); }
+pub fn decode_codes(codes: &[TersciiCode]) -> Option<alloc::string::String> {
+    let mut s = alloc::string::String::with_capacity(codes.len());
+    for &code in codes {
+        let byte = DECODE_CODE_LUT[code.0 as usize];
+        if byte == 0xFF { return None; }
+        // SAFETY: all TERSCII chars are ASCII (TABLE bytes 0x00–0x7A, all < 0x80),
+        // so each byte is valid single-byte UTF-8.
+        unsafe { s.as_mut_vec().push(byte); }
     }
     Some(s)
 }
@@ -256,17 +281,44 @@ mod tests {
         assert_eq!(TABLE.chars().count(), 81);
     }
 
-    #[cfg(feature = "tryte")]
     #[test]
-    fn test_encode_decode_str() {
-        let encoded = encode_str("Hello, World!").unwrap();
-        assert_eq!(encoded.len(), 13);
-        assert_eq!(decode_str(&encoded).unwrap(), "Hello, World!");
+    fn test_encode_code_known_values() {
+        // BCT4 encoding: v = t3*27 + t2*9 + t1*3 + t0, BCT = (t3<<6)|(t2<<4)|(t1<<2)|t0
+        // 'H' = 75: 75 = 2*27+2*9+1*3+0 = [2,2,1,0] → BCT = 0b10_10_01_00 = 0xA4
+        assert_eq!(encode_code('H').map(|c| c.raw()), Some(0xA4));
+        // ' ' = 1:  1  = 0*27+0*9+0*3+1 = [0,0,0,1] → BCT = 0b00_00_00_01 = 0x01
+        assert_eq!(encode_code(' ').map(|c| c.raw()), Some(0x01));
+        // '0' = 2:  2  = 0*27+0*9+0*3+2 = [0,0,0,2] → BCT = 0b00_00_00_10 = 0x02
+        assert_eq!(encode_code('0').map(|c| c.raw()), Some(0x02));
+        assert!(encode_code('€').is_none());
     }
 
-    #[cfg(feature = "tryte")]
     #[test]
-    fn test_encode_str_unknown() {
-        assert!(encode_str("Hello €").is_none());
+    fn test_decode_code_roundtrip_hello_world() {
+        let msg: alloc::string::String = "Hello, World!"
+            .chars()
+            .map(|c| decode_code(encode_code(c).unwrap()).unwrap())
+            .collect();
+        assert_eq!(msg, "Hello, World!");
+    }
+
+    #[test]
+    fn test_decode_code_invalid_bct() {
+        // 0xFF = 0b11_11_11_11: all 2-bit groups are 11 → invalid BCT
+        assert!(decode_code(TersciiCode(0xFF)).is_none());
+        // 0x03 = 0b00_00_00_11: last group is 11 → invalid
+        assert!(decode_code(TersciiCode(0x03)).is_none());
+        // 0xAB = 0b10_10_10_11: last group is 11 → invalid
+        assert!(decode_code(TersciiCode(0xAB)).is_none());
+    }
+
+    #[test]
+    fn test_code_roundtrip_all_printable() {
+        let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+        for c in printable.chars() {
+            let code = encode_code(c).unwrap_or_else(|| panic!("encode_code({c:?}) failed"));
+            let c2 = decode_code(code).unwrap_or_else(|| panic!("decode_code failed for {c:?}"));
+            assert_eq!(c, c2);
+        }
     }
 }

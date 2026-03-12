@@ -1,13 +1,13 @@
-use balanced_ternary::{terscii};
+use balanced_ternary::terscii;
 
 const MESSAGE: &str = "Hello, World!";
 
 fn main() {
-    // TERSCII: encode a string to balanced ternary trytes, decode back
-    // only supports 0-81 ascii range
     let encoded = terscii::encode_str(MESSAGE).unwrap();
-    println!("\nstring operations:");
-    println!("  encoded:  {encoded}");
-    let decoded = terscii::decode_str(&encoded).unwrap();
-    println!("  decoded:  {decoded}");
+    let decoded = terscii::decode_codes(&encoded).unwrap();
+
+    let repr: Vec<String> = encoded.iter().map(|c| c.to_string()).collect();
+    println!("original: {MESSAGE}");
+    println!("encoded:  {}", repr.join(" "));
+    println!("decoded:  {decoded}");
 }

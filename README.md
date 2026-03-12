@@ -75,14 +75,6 @@ Provides fixed-width storage types optimised for performance and memory:
 | `BTer9` | `u32` | 9 | −9841..9841 | Balanced BCT, Jones `bter9_t` |
 | `BTer27` | `u64` | 27 | ±(3²⁷−1)/2 | Balanced BCT, Jones `bter27_t` |
 
-### `terscii`
-
-> Requires `ternary-string` and `tryte`.
-
-Provides Jones's [TERSCII](https://homepage.divms.uiowa.edu/~jones/ternary/terscii.shtml) encoding:
-an 81-character table arranged in a 9×9 grid, where each character maps to a 4-trit ternary value.
-Covers printable ASCII, common controls (space, tab, newline), and punctuation.
-
 ## Storage types
 
 Choosing the right type for your use case matters:
