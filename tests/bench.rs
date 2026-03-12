@@ -18,33 +18,32 @@ use std::time::Instant;
 
 const ITERS: u32 = 500_000;
 
-/// Runs `f` for `iters` iterations (after warmup), prints ns/op in a stable
-/// machine-parseable format: `  <label>  (<ns/op> ns/op)`.
+/// Runs `f` for `iters` iterations across `PASSES` timed samples (after warmup).
 ///
-/// Takes the minimum elapsed time over 3 passes to suppress OS jitter,
-/// cache cold-starts, and CPU frequency ramp-up. The minimum represents
-/// the "best achievable" latency — a stable, noise-resistant measurement.
+/// Reports best (fastest sample) and median.  The compare script keys on
+/// `(X.X ns/op)` for best and `M ops/s` for the label — both kept stable.
 fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
-    // Warmup: 10% of iters — ensures CPU boost and instruction cache are hot.
+    const PASSES: usize = 9;
+
+    // Warmup: ~10% of iters so CPU boost and I-cache are hot before timing.
     for _ in 0..iters / 10 {
         f();
     }
 
-    // 5 timed passes; take the minimum (least OS interference).
-    let mut min_secs = f64::MAX;
-    for _ in 0..5 {
+    let mut samples = [0f64; PASSES];
+    for s in &mut samples {
         let start = Instant::now();
         for _ in 0..iters {
             f();
         }
-        let secs = start.elapsed().as_secs_f64();
-        if secs < min_secs {
-            min_secs = secs;
-        }
+        *s = start.elapsed().as_secs_f64() * 1e9 / iters as f64;
     }
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-    let ops_sec = iters as f64 / min_secs;
+    let best_ns   = samples[0];
+    let median_ns = samples[PASSES / 2]; // index 4 of 9
 
+    let ops_sec = 1e9 / best_ns;
     let (ops_val, ops_unit) = if ops_sec >= 1_000_000.0 {
         (ops_sec / 1_000_000.0, "M ops/s")
     } else if ops_sec >= 1_000.0 {
@@ -53,12 +52,10 @@ fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
         (ops_sec, "  ops/s")
     };
 
-    let ns_op = min_secs * 1e9 / iters as f64;
-
-    // Format: label column + stats. The `ns/op` token is used by the diff script.
+    // `(X.X ns/op)` is parsed by bench-compare.py for best-latency tracking.
     println!(
-        "  {:<45} {:>8.2} {:<7}  ({:>7.1} ns/op)",
-        label, ops_val, ops_unit, ns_op
+        "  {:<52}  {:>8.2} {}  ({:>6.1} ns/op)  med {:>6.1} ns  [{} × {}]",
+        label, ops_val, ops_unit, best_ns, median_ns, PASSES, iters
     );
 }
 

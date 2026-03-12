@@ -23,23 +23,9 @@ name = "hello"
 path = "tests/examples/hello.rs"
 harness = false
 
-[[bench]]
-name = "bench"
-harness = false
-
-# cargo bench uses the bench profile — fat LTO for maximum cross-crate
-# inlining so benchmarks reflect true optimized performance.
-# cargo test --release --doc uses release profile (lto=false here)
-# which avoids the LLVM context-destructor stack overflow with fat LTO.
-[profile.bench]
-inherits = "release"
-lto = "fat"
 
 [profile.release]
 lto = false
 strip = "symbols"
-
-[dev-dependencies]
-divan = "0.1"
 
 [dependencies]
