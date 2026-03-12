@@ -48,15 +48,13 @@ features = ["ternary-string", "tryte", "ternary-store", "terscii"]
 
 ### `ternary-string`
 
-Provides the `Ternary` type: a heap-allocated `Vec<Digit>` for arbitrary-precision balanced ternary.
-Implements `DigitOperate`.
+`Ternary` type: a heap-allocated `Vec<Digit>` for arbitrary-precision balanced ternary. Implements `DigitOperate`.
 
 ### `tryte`
 
 > Requires `ternary-string`.
 
-Provides `Tryte<N>`: a stack-allocated, `Copy`, fixed-width ternary number of exactly `N` trits.
-Implements `DigitOperate`.
+Provides `Tryte<N>`: a stack-allocated, `Copy`, fixed-width ternary number of exactly `N` trits. Implements `DigitOperate`.
 
 ### `ternary-store`
 
