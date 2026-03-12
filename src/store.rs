@@ -2587,14 +2587,12 @@ impl UTer27 {
     }
 
     #[inline] pub fn to_dec(&self) -> u64 {
-        // Decode as three independent 9-trit (UTer9) groups.
-        // The three Horner chains have no dependencies between them, so LLVM
-        // can schedule all three in parallel via ILP — vs. one serial 27-step chain.
-        let w = self.0;
-        let lo  = UTer9((w         & MASK9 as u64) as u32).to_dec() as u64;
-        let mid = UTer9(((w >> 18) & MASK9 as u64) as u32).to_dec() as u64;
-        let hi  = UTer9(((w >> 36) & MASK9 as u64) as u32).to_dec() as u64;
-        lo + mid * 19683 + hi * (19683 * 19683)
+        let mut val = 0u64;
+        for k in (0..27u32).rev() {
+            let code = (self.0 >> (2 * k)) & 3;
+            val = val * 3 + code;
+        }
+        val
     }
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
