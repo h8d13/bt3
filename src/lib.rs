@@ -443,25 +443,27 @@ impl Ternary {
             let (new_carry, quintet) = FROM_DEC_TRIT5_LUT[v as usize];
             carry = new_carry as u64;
             // quintet is LSB-first; write reversed into scratch for MSB-first.
+            // Negate inline for negative inputs — eliminates a second O(n) pass.
             end -= 5;
-            scratch[end]     = quintet[4];
-            scratch[end + 1] = quintet[3];
-            scratch[end + 2] = quintet[2];
-            scratch[end + 3] = quintet[1];
-            scratch[end + 4] = quintet[0];
+            if negative {
+                scratch[end]     = -quintet[4];
+                scratch[end + 1] = -quintet[3];
+                scratch[end + 2] = -quintet[2];
+                scratch[end + 3] = -quintet[1];
+                scratch[end + 4] = -quintet[0];
+            } else {
+                scratch[end]     = quintet[4];
+                scratch[end + 1] = quintet[3];
+                scratch[end + 2] = quintet[2];
+                scratch[end + 3] = quintet[1];
+                scratch[end + 4] = quintet[0];
+            }
         }
 
         // Trim leading zeros introduced by fixed 5-digit groups.
         let start = scratch[end..45].iter().position(|d| *d != Digit::Zero)
             .map(|p| end + p)
             .unwrap_or(44);
-
-        // For negative inputs, negate in-place.
-        if negative {
-            for d in scratch[start..45].iter_mut() {
-                *d = -*d;
-            }
-        }
 
         Ternary::new(scratch[start..45].to_vec())
     }
