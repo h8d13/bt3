@@ -1083,31 +1083,36 @@ impl DigitOperate for Ternary {
         f: impl Fn(Digit, Digit, Digit) -> (Digit, Digit),
         other: Self,
     ) -> Self {
-        let (a, b) = (&self.digits, &other.digits);
-        // Fast path: equal-length operands — eliminates per-iteration offset branches.
-        if a.len() == b.len() {
-            let mut digits = Vec::with_capacity(a.len());
+        let a = &self.digits;
+        // Fast path: equal-length — reuse `other`'s allocation, write in-place
+        // right-to-left. No reverse() needed: `i` is already the MSB-first index.
+        if a.len() == other.digits.len() {
+            let n = a.len();
+            let mut result = other;
             let mut carry = Zero;
-            for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
-                let (c, res) = f(da, db, carry);
+            for i in (0..n).rev() {
+                let (c, res) = f(a[i], result.digits[i], carry);
                 carry = c;
-                digits.push(res);
+                result.digits[i] = res;
             }
-            digits.reverse();
-            return Ternary::new(digits);
+            return result;
         }
+        let b = &other.digits;
         let len = a.len().max(b.len());
         let (oa, ob) = (len - a.len(), len - b.len());
+        // Pre-size the Vec and write directly at each MSB-first index,
+        // eliminating the push-then-reverse pass.
+        // SAFETY: Digit is Copy + !Drop; all `len` elements are written below.
         let mut digits = Vec::with_capacity(len);
+        unsafe { digits.set_len(len); }
         let mut carry = Zero;
         for i in (0..len).rev() {
             let da = if i < oa { Zero } else { a[i - oa] };
             let db = if i < ob { Zero } else { b[i - ob] };
             let (c, res) = f(da, db, carry);
             carry = c;
-            digits.push(res);
+            digits[i] = res;
         }
-        digits.reverse();
         Ternary::new(digits)
     }
 }
