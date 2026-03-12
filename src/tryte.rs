@@ -5,6 +5,41 @@ use crate::{
 };
 use alloc::string::String;
 use alloc::vec::Vec;
+
+// ---------------------------------------------------------------------------
+// 5-trit balanced-ternary LUT for from_i64
+//
+// Maps (x % 243 + carry_in) ∈ 0..=243 → (carry_out, [i8; 5]) where the
+// array is the 5-trit balanced-ternary encoding of the input, LSB first.
+// carry_out = 1 when the value ≥ 122 (doesn't fit in 5 balanced trits).
+//
+// Reduces `from_i64` for Tryte<6> from 6 serial divmod-by-3 iterations
+// (each depending on the previous) down to 1 divmod-by-243 + 1 LUT lookup
+// + 1 simple trit for the remaining position.
+const fn trit5_entry_i64(v: u8) -> (u8, [i8; 5]) {
+    let carry = (v >= 122) as u8;
+    let mut n: i16 = if v >= 122 { v as i16 - 243 } else { v as i16 };
+    let mut t = [0i8; 5];
+    let mut i = 0usize;
+    while i < 5 {
+        let r = ((n % 3) + 3) % 3; // Rust % is truncating, so normalise to 0..2
+        t[i] = if r == 2 { -1i8 } else { r as i8 };
+        n = (n - t[i] as i16) / 3;
+        i += 1;
+    }
+    (carry, t)
+}
+
+const TRIT5_LUT: [(u8, [i8; 5]); 244] = {
+    let mut lut = [(0u8, [0i8; 5]); 244];
+    let mut v = 0u8;
+    loop {
+        lut[v as usize] = trit5_entry_i64(v);
+        if v == 243 { break; }
+        v += 1;
+    }
+    lut
+};
 use core::fmt::{Display, Formatter};
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg as StdNeg, Not, Shl, Shr, Sub};
 use core::str::FromStr;
@@ -156,35 +191,55 @@ impl<const SIZE: usize> Tryte<SIZE> {
         if v == 0 {
             return Self::new(raw);
         }
-        // Work unsigned: avoids ((n%3)+3)%3 (two signed mod-3 per iteration).
+        // Work unsigned: avoids ((n%3)+3)%3 in the hot loop.
         // Hoist the sign branch outside the loop so each hot path is branch-free.
-        // SAFETY: trit ∈ {-1, 0, 1} in both branches.
         let negative = v < 0;
         let mut x = v.unsigned_abs();
-        let mut i = SIZE;
-        if !negative {
-            while i > 0 {
-                i -= 1;
-                let rem = (x % 3) as u8; // rem ∈ {0, 1, 2}
-                // Map: 0→Zero(0), 1→Pos(1), 2→Neg(-1)
-                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
-                    if rem == 2 { -1i8 } else { rem as i8 }
-                )};
-                // Advance: x = (x - trit) / 3
-                //   rem=0: x/3  rem=1: (x-1)/3  rem=2: (x-2)/3+1 = (x+1)/3
-                x = (x - rem as u64) / 3 + (rem == 2) as u64;
-            }
-        } else {
-            while i > 0 {
-                i -= 1;
-                let rem = (x % 3) as u8;
-                // Negate: 0→Zero(0), 1→Neg(-1), 2→Pos(+1)
-                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
-                    if rem == 2 { 1i8 } else { -(rem as i8) }
-                )};
-                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+        let mut carry = 0u8;
+        // `pos` is the index of the next slot to fill, working right-to-left
+        // (raw[SIZE-1] = LSB = trit0, raw[0] = MSB = trit(SIZE-1)).
+        let mut pos = SIZE;
+
+        // # Optimization: TRIT5_LUT — process 5 trits per LUT lookup
+        //
+        // Each iteration converts 5 trits with one divmod-by-243 + one table
+        // lookup instead of 5 serial divmod-by-3 iterations.  For SIZE=6 this
+        // is 1 LUT group + 1 simple trit = 2 operations instead of 6 serial
+        // ones.  For larger Trytes the same reduction applies (⌊SIZE/5⌋ groups
+        // instead of SIZE serial steps).
+        while pos >= 5 && (x > 0 || carry > 0) {
+            // g ≤ 243 (x%243 ≤ 242, carry ≤ 1) → valid LUT index
+            let g = ((x % 243) as u8).wrapping_add(carry);
+            x /= 243;
+            let (c, q) = TRIT5_LUT[g as usize];
+            carry = c;
+            pos -= 5;
+            // q is LSB-first: q[0]=trit at pos+4, q[4]=trit at pos.
+            let mut j = 0usize;
+            while j < 5 {
+                // SAFETY: q[j] ∈ {-1, 0, 1}; negating preserves this.
+                let t = if negative { -q[j] } else { q[j] };
+                raw[pos + 4 - j] = unsafe { core::mem::transmute::<i8, Digit>(t) };
+                j += 1;
             }
         }
+
+        // Handle remaining trits (< 5) one at a time.
+        while pos > 0 && (x > 0 || carry > 0) {
+            let r = ((x % 3) as u8).wrapping_add(carry);
+            x /= 3;
+            // r ∈ {0,1,2,3}; 2 → trit=-1 carry=1; 3 → trit=0 carry=1.
+            let (trit, c): (i8, u8) = if r == 0 { (0, 0) }
+                                       else if r == 1 { (1, 0) }
+                                       else if r == 2 { (-1, 1) }
+                                       else           { (0, 1) };
+            carry = c;
+            let t = if negative { -trit } else { trit };
+            pos -= 1;
+            // SAFETY: t ∈ {-1, 0, 1}.
+            raw[pos] = unsafe { core::mem::transmute::<i8, Digit>(t) };
+        }
+
         Self::new(raw)
     }
 

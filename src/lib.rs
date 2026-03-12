@@ -417,27 +417,89 @@ impl Ternary {
         // 45 = 9 groups × 5 trits; i64::MAX needs at most 8 groups (40 trits).
         let mut scratch = [Digit::Zero; 45];
         let mut end = 45usize;
-        let mut carry: u64 = 0;
-        while x > 0 || carry > 0 {
-            let v = (x % 243 + carry) as u8;
-            x /= 243;
-            let (new_carry, quintet) = FROM_DEC_TRIT5_LUT[v as usize];
-            carry = new_carry as u64;
-            // quintet is LSB-first; write reversed into scratch for MSB-first.
-            // Negate inline for negative inputs — eliminates a second O(n) pass.
-            end -= 5;
-            if negative {
-                scratch[end]     = -quintet[4];
-                scratch[end + 1] = -quintet[3];
-                scratch[end + 2] = -quintet[2];
-                scratch[end + 3] = -quintet[1];
-                scratch[end + 4] = -quintet[0];
-            } else {
-                scratch[end]     = quintet[4];
-                scratch[end + 1] = quintet[3];
-                scratch[end + 2] = quintet[2];
-                scratch[end + 3] = quintet[1];
-                scratch[end + 4] = quintet[0];
+
+        // # Optimization: parallel group extraction for large values.
+        //
+        // For x >= 3^20, the serial `x /= 243` chain has 8 loop-carried
+        // dependencies (each iteration reads the x modified by the previous).
+        // Instead, split once into lo = x % 3^20 and hi = x / 3^20 — both fit
+        // in u32 — then extract all 8 group values as independent u32 divmods.
+        // An OOO CPU can issue the 4+4 independent divmods in parallel.
+        // The remaining carry chain (8 LUT lookups + adds) is serial but cheap.
+        const B20: u64 = 3_486_784_401; // 3^20 = 243^4
+        if x >= B20 {
+            let lo = (x % B20) as u32;
+            let hi = (x / B20) as u32;
+            // Each gs[i] is the i-th 5-trit group of x, in [0, 242].
+            // Groups 0-3 come from lo (< 3^20), groups 4-7 from hi (< 2645).
+            let gs: [u32; 8] = [
+                lo % 243,
+                (lo / 243) % 243,
+                (lo / 59_049) % 243,   // 3^10
+                lo / 14_348_907,       // 3^15; result < 3^5 = 243 since lo < 3^20
+                hi % 243,
+                (hi / 243) % 243,
+                (hi / 59_049) % 243,
+                hi / 14_348_907,       // hi < 2645 so hi/3^15 = 0 always
+            ];
+            let mut carry = 0u32;
+            let mut qs = [[Digit::Zero; 5]; 8];
+            let mut i = 0usize;
+            while i < 8 {
+                let (c, q) = FROM_DEC_TRIT5_LUT[(gs[i] + carry) as usize];
+                carry = c as u32;
+                qs[i] = q;
+                i += 1;
+            }
+            // Overflow carry: i64::MAX > (3^40-1)/2, so very large values need
+            // a 41st trit. scratch has room (45 slots, 8 groups use 40).
+            if carry > 0 {
+                end -= 5;
+                scratch[end + 4] = if negative { Neg } else { Pos };
+            }
+            // Write groups MSB-first (group 7 first, group 0 last).
+            let mut i = 8usize;
+            while i > 0 {
+                i -= 1;
+                end -= 5;
+                let q = qs[i];
+                if negative {
+                    scratch[end]     = -q[4];
+                    scratch[end + 1] = -q[3];
+                    scratch[end + 2] = -q[2];
+                    scratch[end + 3] = -q[1];
+                    scratch[end + 4] = -q[0];
+                } else {
+                    scratch[end]     = q[4];
+                    scratch[end + 1] = q[3];
+                    scratch[end + 2] = q[2];
+                    scratch[end + 3] = q[1];
+                    scratch[end + 4] = q[0];
+                }
+            }
+        } else {
+            let mut carry: u64 = 0;
+            while x > 0 || carry > 0 {
+                let v = (x % 243 + carry) as u8;
+                x /= 243;
+                let (new_carry, quintet) = FROM_DEC_TRIT5_LUT[v as usize];
+                carry = new_carry as u64;
+                // quintet is LSB-first; write reversed into scratch for MSB-first.
+                // Negate inline for negative inputs — eliminates a second O(n) pass.
+                end -= 5;
+                if negative {
+                    scratch[end]     = -quintet[4];
+                    scratch[end + 1] = -quintet[3];
+                    scratch[end + 2] = -quintet[2];
+                    scratch[end + 3] = -quintet[1];
+                    scratch[end + 4] = -quintet[0];
+                } else {
+                    scratch[end]     = quintet[4];
+                    scratch[end + 1] = quintet[3];
+                    scratch[end + 2] = quintet[2];
+                    scratch[end + 3] = quintet[1];
+                    scratch[end + 4] = quintet[0];
+                }
             }
         }
 
