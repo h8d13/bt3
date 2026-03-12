@@ -2834,7 +2834,7 @@ impl BTer9 {
     /// Jones biased encoding: balanced 0 = unsigned `BTER9_BIAS`).
     #[inline] pub fn to_uter9(self) -> UTer9 { UTer9::from(self) }
 
-    #[inline] pub const fn il_neg(self) -> Self { Self(il_neg_u32(self.0, MASK9_L)) }
+    #[inline] pub const fn il_neg(self) -> Self { Self(MASK9_H - self.0) }
     #[inline(always)] pub const fn il_and(self, o: Self) -> Self { Self(il_and_u32(self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn il_or (self, o: Self) -> Self { Self(il_or_u32 (self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn il_xor(self, o: Self) -> Self { Self(il_xor_u32(self.0, o.0, MASK9_L)) }
@@ -2867,7 +2867,7 @@ impl Sub for BTer9 {
     #[inline]
     fn sub(self, r: Self) -> Self {
         // sub(a,b) = add(a, -b); il_neg is O(1)
-        let neg_r = il_neg_u32(r.0, MASK9_L);
+        let neg_r = MASK9_H - r.0;
         let s = uter_add_u32_raw(self.0, neg_r, MASK9_L);
         Self(uter_add_u32_raw(s, BTER9_REMAP, MASK9_L))
     }
@@ -2943,7 +2943,7 @@ impl BTer27 {
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
 
-    #[inline(always)] pub const fn il_neg(self) -> Self { Self(il_neg_u64(self.0, MASK27_L)) }
+    #[inline(always)] pub const fn il_neg(self) -> Self { Self(MASK27_H - self.0) }
     #[inline(always)] pub const fn il_and(self, o: Self) -> Self { Self(il_and_u64(self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn il_or (self, o: Self) -> Self { Self(il_or_u64 (self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn il_xor(self, o: Self) -> Self { Self(il_xor_u64(self.0, o.0, MASK27_L)) }
@@ -2974,7 +2974,7 @@ impl Sub for BTer27 {
     #[inline]
     fn sub(self, r: Self) -> Self {
         // sub(a,b) = add(a, -b); il_neg is O(1)
-        let neg_r = il_neg_u64(r.0, MASK27_L);
+        let neg_r = MASK27_H - r.0;
         let s = uter_add_u64_raw(self.0, neg_r, MASK27_L);
         Self(uter_add_u64_raw(s, BTER27_REMAP, MASK27_L))
     }
