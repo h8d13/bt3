@@ -18,13 +18,12 @@ This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/
     - **Advanced logic**: Implementation of
       [K3](https://en.wikipedia.org/wiki/De_Morgan_algebra#Kleene_algebra),
       [Jones's designs](https://homepage.divms.uiowa.edu/~jones/ternary/),
-      [Morton Bit-tricks](https://github.com/Forceflow/libmorton)
+      [Morton Bit-tricks](https://github.com/Forceflow/libmorton),
       [BI3](https://en.wikipedia.org/wiki/Many-valued_logic#Bochvar's_internal_three-valued_logic),
       [L3](https://en.wikipedia.org/wiki/%C5%81ukasiewicz_logic),
       [RM3](https://en.wikipedia.org/wiki/Paraconsistent_logic#An_ideal_three-valued_paraconsistent_logic),
-      [paraconsistent-logic](https://en.wikipedia.org/wiki/Paraconsistent_logic#An_ideal_three-valued_paraconsistent_logic)
-      and [HT](https://en.wikipedia.org/wiki/Intermediate_logic) imply operations,
-      and more HT, BI3, L3 and post-logic operations.
+      [paraconsistent-logic](https://en.wikipedia.org/wiki/Paraconsistent_logic#An_ideal_three-valued_paraconsistent_logic),
+      and [HT](https://en.wikipedia.org/wiki/Intermediate_logic) imply operations, more HT, BI3, L3 and post-logic operations.
     - **Consensus** (`a · (a == b)`): extracts positions where both trits agree; zero elsewhere.
     - **Accept-anything** (`sign(a + b)`): the non-zero trit wins; conflicting non-zero trits → `Zero`.
 - **Custom Representation:** Parse and display numbers using `+`, `0`, and `-` symbols by default, or custom ones.
