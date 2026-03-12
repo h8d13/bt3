@@ -34,56 +34,50 @@ def parse_divan(fname: str) -> dict[str, float]:
 
     Divan tree structure uses Unicode box-drawing characters:
       ╰─  ├─  │   to show depth and siblings.
-    We count leading '│' groups to determine depth, strip tree chars from
-    the name column, split columns on '│', and take the median (3rd column).
+    We match the full line with a regex so that leading │ characters in the
+    tree prefix don't collide with the │ column separators.
     """
     results: dict[str, float] = {}
     # stack of ancestor names indexed by depth (0 = top-level module)
     name_stack: list[str] = []
 
+    # Match: prefix (│  or    groups) + tree char (├─ or ╰─) + rest of line.
+    _LINE_RE = re.compile(r"^((?:│\s{2}|\s{3})*)(├─|╰─)\s+(.*)")
+
     with open(fname, encoding="utf-8") as f:
         for raw in f:
             line = raw.rstrip("\n")
 
-            # Only process lines that contain box-drawing tree characters.
-            if "─" not in line and "╰" not in line and "├" not in line:
+            m = _LINE_RE.match(line)
+            if not m:
                 continue
 
-            # Split on │ to get columns; first element is the name column.
-            parts = line.split("│")
-            if len(parts) < 4:
-                continue
+            depth_str, _tree_char, rest = m.groups()
+            depth = len(depth_str) // 3
 
-            name_col = parts[0]
-            # Timing columns: fastest│slowest│median│mean│samples│iters
-            # index:             1       2       3     4    5       6
-            # Note: for leaf nodes the "fastest" value appears in the name
-            # column (parts[0]); parts[1]=slowest, parts[2]=median.
-            median_col = parts[2] if len(parts) > 2 else ""
+            # rest = "<name> [fastest_time]  │ slowest │ median │ ..."
+            # Find the first │ in rest to split name+fastest from timing cols.
+            pipe = rest.find("│")
+            if pipe == -1:
+                # Group header with no timing data — just track the name.
+                bench_name = rest.strip()
+                median_ns = None
+            else:
+                name_part = rest[:pipe]
+                # timing_cols: ["", " slowest", " median", " mean", ...]
+                timing_cols = rest[pipe:].split("│")
+                median_ns = parse_ns(timing_cols[2]) if len(timing_cols) > 2 else None
+                # Strip the "fastest" time that Divan appends to the name field.
+                bench_name = re.sub(r'\s+[\d.]+\s*(?:ns|µs|us|ms|s)\s*$', '', name_part).strip()
 
-            # Determine depth by counting '│' + '   ' groups before the tree char.
-            # Each depth level is represented by "│  " (pipe + 2 spaces) or "   "
-            # in the prefix. We look at the portion before ├─ or ╰─.
-            prefix_match = re.match(r"^((?:│\s{2}|\s{3})*)(├─|╰─)\s*(.*)", name_col)
-            if not prefix_match:
-                continue
-
-            depth_str, _tree_char, bench_name = prefix_match.groups()
-            # For leaf nodes Divan puts the "fastest" time in the name column,
-            # e.g. "10                      19.89 ns      ". Strip it off.
-            bench_name = re.sub(r'\s+[\d.]+\s*(?:ns|µs|us|ms|s)\s*$', '', bench_name).strip()
             if not bench_name:
                 continue
 
-            # Depth = number of indent groups (each is 3 chars: "│  " or "   ")
-            depth = len(depth_str) // 3
-
-            # Trim stack to current depth and push this name
+            # Trim stack to current depth and push this name.
             name_stack = name_stack[:depth]
             name_stack.append(bench_name)
 
-            # Only record leaf nodes (those with timing data in the median column)
-            median_ns = parse_ns(median_col)
+            # Only record leaf nodes (those with timing data in the median column).
             if median_ns is not None:
                 key = "/".join(name_stack)
                 results[key] = median_ns
