@@ -749,13 +749,26 @@ impl Ter40 {
     #[inline]
     fn to_raw(self) -> [Digit; 40] {
         let mut raw = [Digit::Zero; 40];
-        let mut n = self.0;
-        for i in (0..40).rev() {
-            let rem = ((n % 3) + 3) % 3;
-            let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
-            // SAFETY: trit ∈ {-1, 0, 1}.
-            raw[i] = unsafe { core::mem::transmute::<i8, Digit>(trit) };
-            n = (n - trit as i64) / 3;
+        if self.0 == 0 { return raw; }
+        let negative = self.0 < 0;
+        let mut x = self.0.unsigned_abs();
+        // SAFETY: trit ∈ {-1, 0, 1} in both branches.
+        if !negative {
+            for i in (0..40).rev() {
+                let rem = (x % 3) as u8;
+                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                    if rem == 2 { -1i8 } else { rem as i8 }
+                )};
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+            }
+        } else {
+            for i in (0..40).rev() {
+                let rem = (x % 3) as u8;
+                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                    if rem == 2 { 1i8 } else { -(rem as i8) }
+                )};
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+            }
         }
         raw
     }
@@ -1275,18 +1288,26 @@ impl BctTer32 {
     /// assert_eq!(BctTer32::from_dec(-13).to_dec(), -13);
     /// ```
     pub fn from_dec(v: i64) -> Self {
+        if v == 0 { return Self::ZERO; }
+        let negative = v < 0;
+        let mut x = v.unsigned_abs();
         let mut pos = 0u32;
         let mut neg = 0u32;
-        let mut n = v;
-        for bit in 0..32 {
-            let rem = ((n % 3) + 3) % 3;
-            let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
-            if trit == 1 {
-                pos |= 1u32 << bit;
-            } else if trit == -1 {
-                neg |= 1u32 << bit;
+        // SAFETY: unsigned single mod avoids ((n%3)+3)%3 double-mod pattern.
+        if !negative {
+            for bit in 0..32 {
+                let rem = (x % 3) as u8;
+                if rem == 1 { pos |= 1u32 << bit; }
+                else if rem == 2 { neg |= 1u32 << bit; }
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
             }
-            n = (n - trit as i64) / 3;
+        } else {
+            for bit in 0..32 {
+                let rem = (x % 3) as u8;
+                if rem == 1 { neg |= 1u32 << bit; }
+                else if rem == 2 { pos |= 1u32 << bit; }
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+            }
         }
         Self { pos, neg }
     }
