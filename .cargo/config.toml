@@ -1,0 +1,5 @@
+# Align all function entry points to a 64-byte (one cache line) boundary.
+# This prevents cache-line layout effects from causing benchmark noise when
+# functions are recompiled and shift in .text.
+[build]
+rustflags = ["-C", "llvm-args=-align-all-functions=64"]
