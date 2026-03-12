@@ -2473,6 +2473,20 @@ const UTER5_LUT: [u16; 243] = {
     lut
 };
 
+/// Precomputed 3-trit BCT decoding: `UTER3_DEC_LUT[c]` = decimal value (0..26)
+/// of the 3-trit BCT word `c` (6 bits, trit k occupies bits `2k..2k+2`).
+///
+/// Invalid codes (any 2-bit pair == 11) are never indexed by valid `UTer9`/`UTer27` values.
+const UTER3_DEC_LUT: [u8; 64] = {
+    let mut lut = [0u8; 64];
+    let mut c = 0usize;
+    while c < 64 {
+        lut[c] = (((c >> 4) & 3) * 9 + ((c >> 2) & 3) * 3 + (c & 3)) as u8;
+        c += 1;
+    }
+    lut
+};
+
 // =========================================================================
 // UTer9 — 9-trit unsigned ternary (uter9_t), range 0..19682
 // =========================================================================
@@ -2504,12 +2518,12 @@ impl UTer9 {
     }
 
     #[inline] pub fn to_dec(&self) -> u32 {
-        let mut val = 0u32;
-        for k in (0..9u32).rev() {
-            let code = (self.0 >> (2 * k)) & 3;
-            val = val * 3 + code;
-        }
-        val
+        // Three 3-trit LUT lookups (6 bits each) + two multiplies instead of
+        // a 9-step serial Horner chain. LLVM can schedule all three loads in parallel.
+        let lo  = UTER3_DEC_LUT[(self.0 & 0x3F) as usize] as u32;
+        let mid = UTER3_DEC_LUT[((self.0 >> 6) & 0x3F) as usize] as u32;
+        let hi  = UTER3_DEC_LUT[(self.0 >> 12) as usize] as u32;
+        lo + mid * 27 + hi * 729
     }
 
     #[inline(always)] pub const fn raw(self) -> u32 { self.0 }
@@ -2611,12 +2625,12 @@ impl UTer27 {
     }
 
     #[inline] pub fn to_dec(&self) -> u64 {
-        let mut val = 0u64;
-        for k in (0..27u32).rev() {
-            let code = (self.0 >> (2 * k)) & 3;
-            val = val * 3 + code;
-        }
-        val
+        // Split into three independent 9-trit groups — same ILP trick as BTer27::to_dec.
+        // Each group calls the LUT-based UTer9::to_dec (3 lookups + 2 muls).
+        let lo  = UTer9((self.0 & MASK9 as u64) as u32).to_dec() as u64;
+        let mid = UTer9(((self.0 >> 18) & MASK9 as u64) as u32).to_dec() as u64;
+        let hi  = UTer9((self.0 >> 36) as u32).to_dec() as u64;
+        lo + mid * 19_683u64 + hi * 387_420_489u64
     }
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
@@ -2738,12 +2752,8 @@ impl BTer9 {
     }
 
     #[inline] pub fn to_dec(&self) -> i32 {
-        let mut val = 0i32;
-        for k in (0..9u32).rev() {
-            let code = (self.0 >> (2 * k)) & 3;
-            val = val * 3 + code as i32 - 1;
-        }
-        val
+        // Reuse UTer9's LUT-based decoder: BTer9 is UTer9 with a fixed bias.
+        UTer9(self.0).to_dec() as i32 - BTER9_BIAS as i32
     }
 
     #[inline(always)] pub const fn raw(self) -> u32 { self.0 }
