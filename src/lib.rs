@@ -652,20 +652,27 @@ impl Ternary {
     /// let fixed = ternary.with_length(1);
     /// assert_eq!(fixed.to_string(), "+");
     /// ```
-    /// # Optimization: single allocation
+    /// # Optimization: single allocation + write_bytes zero-fill
     ///
     /// The previous implementation allocated a temporary `vec![Zero; diff]`,
     /// then created an empty `Ternary` and extended it twice (zeroes + digits).
-    /// We now do one `Vec::with_capacity` and fill it in order — zero padding
-    /// followed by the existing digits — avoiding intermediate allocations and
-    /// redundant memcpys.
+    /// We now do one `Vec::with_capacity` and fill in order:
+    /// - `ptr::write_bytes` (memset) for the leading zeros — faster than
+    ///   `extend(repeat(Zero).take(pad))` which goes through iterator machinery.
+    /// - `extend_from_slice` (memcpy) for the existing digits.
     pub fn with_length(&self, length: usize) -> Self {
         if length <= self.log() {
             return self.clone();
         }
         let pad = length - self.log();
         let mut digits = Vec::with_capacity(length);
-        digits.extend(core::iter::repeat(Zero).take(pad));
+        // SAFETY: Digit is #[repr(i8)] with Zero=0; 0-byte fill produces
+        // valid Digit::Zero values. Capacity covers `length`; we initialise
+        // the 0..pad range before calling set_len.
+        unsafe {
+            core::ptr::write_bytes(digits.as_mut_ptr(), 0u8, pad);
+            digits.set_len(pad);
+        }
         digits.extend_from_slice(&self.digits);
         Ternary::new(digits)
     }
