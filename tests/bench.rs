@@ -753,6 +753,15 @@ fn bench_libtern() {
     bench("BctTer32   → IlBctTer32 (spread,  O(1))", ITERS, || {
         std::hint::black_box(IlBctTer32::from_bct(std::hint::black_box(bct)));
     });
+    bench("IlBctTer32 il_neg (Jones MASK_H−self, 32-trit)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(il).il_neg());
+    });
+    bench("IlBctTer32 to_dec (Jones parallel reduction)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(il).to_dec());
+    });
+    bench("BctTer32   to_dec (via IlBctTer32 Jones reduction)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(bct).to_dec());
+    });
 
     // ---- Head-to-head: IlBctTer32 vs BctTer32 vs Ter40 -----------------
     println!("\n--- Head-to-head: IlBctTer32 vs BctTer32 vs Ter40 (32-trit AND) ---");

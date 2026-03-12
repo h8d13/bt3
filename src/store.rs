@@ -1376,15 +1376,11 @@ impl BctTer32 {
     /// let t = BctTer32::from_dec(12345);
     /// assert_eq!(t.to_dec(), 12345);
     /// ```
-    pub fn to_dec(&self) -> i64 {
-        let mut val: i64 = 0;
-        for bit in (0..32u32).rev() {
-            let trit = if self.pos & (1 << bit) != 0 { 1i64 }
-                       else if self.neg & (1 << bit) != 0 { -1i64 }
-                       else { 0i64 };
-            val = val * 3 + trit;
-        }
-        val
+    #[inline] pub fn to_dec(&self) -> i64 {
+        // # Optimization: spread to IL then use Jones parallel reduction.
+        // IlBctTer32::from_bct is O(1) PDEP; IlBctTer32::to_dec is a 5-stage
+        // log-depth fold — replacing the O(32) serial Horner dependency chain.
+        IlBctTer32::from_bct(*self).to_dec()
     }
 
     /// Build from a `Ternary` (truncates to 32 trits if longer).
@@ -1878,14 +1874,33 @@ impl IlBctTer32 {
     /// let t = IlBctTer32::from_dec(12345);
     /// assert_eq!(t.to_dec(), 12345);
     /// ```
-    pub fn to_dec(&self) -> i64 {
-        let mut val: i64 = 0;
-        for k in (0..32u32).rev() {
-            let code = (self.0 >> (2 * k)) & 3;
-            let trit = code as i64 - 1; // 0→-1, 1→0, 2→+1
-            val = val * 3 + trit;
-        }
-        val
+    #[inline] pub fn to_dec(&self) -> i64 {
+        // # Optimization: Jones parallel ternary→binary reduction for 32 trits.
+        // 5-stage log-depth fold — identical pattern to UTer27::to_dec.
+        // O(log N) stages with ILP replace the O(N) serial Horner dependency chain.
+        const BIAS: u64 = 926_510_094_425_920; // (3^32 - 1) / 2
+        let ta = self.0;
+        // Stage 1: pair 2-bit codes → 4-bit value (0..8)
+        let acc  = ta & 0x3333_3333_3333_3333u64;
+        let high = (ta >> 2) & 0x3333_3333_3333_3333u64;
+        let acc  = acc + 3 * high;
+        // Stage 2: pair 4-bit → 8-bit (0..80)
+        let high = (acc >> 4) & 0x0F0F_0F0F_0F0F_0F0Fu64;
+        let acc  = acc        & 0x0F0F_0F0F_0F0F_0F0Fu64;
+        let acc  = acc + 9 * high;
+        // Stage 3: pair 8-bit → 16-bit (0..6560)
+        let high = (acc >> 8) & 0x00FF_00FF_00FF_00FFu64;
+        let acc  = acc        & 0x00FF_00FF_00FF_00FFu64;
+        let acc  = acc + 81 * high;
+        // Stage 4: pair 16-bit → 32-bit (0..43_046_720 per half)
+        let high = (acc >> 16) & 0x0000_FFFF_0000_FFFFu64;
+        let acc  = acc         & 0x0000_FFFF_0000_FFFFu64;
+        let acc  = acc + 6_561 * high;
+        // Stage 5: combine 32-bit halves → full unsigned value (0..3^32−1)
+        let high = acc >> 32;
+        let acc  = acc & 0x0000_0000_FFFF_FFFFu64;
+        let unsigned = acc + 43_046_721 * high;
+        unsigned.wrapping_sub(BIAS) as i64
     }
 
     /// Convert to a `Ternary` (32 digits wide; call `.trim()` to strip leading zeros).
@@ -1954,13 +1969,10 @@ impl IlBctTer32 {
     /// ```
     #[inline(always)]
     pub const fn il_neg(self) -> Self {
-        // For pair (h,l): 00→10, 01→01, 10→00.
-        // new_h = NOR(h,l) = !(h|l);  new_l = ANDN(l,h) = !h & l
-        let h = (self.0 >> 1) & MASK_L;
-        let l =  self.0       & MASK_L;
-        let new_h = !(h | l) & MASK_L;
-        let new_l = !h & l & MASK_L;
-        Self((new_h << 1) | new_l)
+        // Jones `TER32_NEG`: per-trit negation (00↔10, 01↔01). One subtraction.
+        // Same principle as BTer27::il_neg and IlTer40: each trit code ≤ MASK_H
+        // pair (10₂), so no borrow propagates between trit pairs.
+        Self(MASK_H - self.0)
     }
 
     /// Trit-wise AND (min).
