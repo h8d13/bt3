@@ -15,6 +15,8 @@ ternary-store = ["ternary-string"]
 tryte = ["ternary-string"]
 ternary-string = []
 terscii = ["ternary-string", "tryte"]
+# Linux-only: getrandom(2) syscall for no_std entropy (x86_64 / aarch64)
+getrandom = []
 
 [[test]]
 name = "hello"

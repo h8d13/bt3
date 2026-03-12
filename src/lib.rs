@@ -1342,6 +1342,9 @@ pub use crate::tryte::Tryte;
 #[cfg(feature = "terscii")]
 pub mod terscii;
 
+#[cfg(feature = "getrandom")]
+pub mod getrandom;
+
 
 #[cfg(test)]
 #[cfg(feature = "ternary-string")]
