@@ -1215,11 +1215,31 @@ impl Ord for Ternary {
     fn cmp(&self, other: &Self) -> Ordering {
         let (a, b) = (&self.digits, &other.digits);
         // Hot path: equal-length operands.
-        // `Digit` is `#[repr(i8)]` with Neg=-1 < Zero=0 < Pos=1, so
-        // `[Digit]::cmp` is lexicographic ternary order — LLVM can
-        // lower this to a vectorized signed byte comparison.
+        // Cast &[Digit] → &[i8] (safe: Digit is repr(i8) with Neg=-1, Zero=0, Pos=1,
+        // so signed byte order matches ternary order). [i8]::cmp is a simple signed
+        // integer loop that LLVM vectorizes with PCMPGTB — much faster than
+        // letting it go through Digit's derived Ord (which generates match arms).
         if a.len() == b.len() {
-            return a.as_slice().cmp(b.as_slice());
+            // Two-pass strategy: a vectorizable fold detects any difference first;
+            // a scalar scan finds the exact position only when needed.
+            // Digit is repr(i8) with values {-1, 0, 1}; signed byte ordering is correct.
+            // SAFETY: Digit is #[repr(i8)]; casting &[Digit] to &[i8] is sound.
+            let a_i8 = unsafe { core::slice::from_raw_parts(a.as_ptr() as *const i8, a.len()) };
+            let b_i8 = unsafe { core::slice::from_raw_parts(b.as_ptr() as *const i8, b.len()) };
+            // OR-reduce of XOR pairs: LLVM vectorizes this with PXOR + POR.
+            // Result is 0 iff all bytes are equal.
+            let diff: i8 = a_i8.iter().zip(b_i8.iter()).fold(0i8, |acc, (x, y)| acc | (x ^ y));
+            if diff == 0 {
+                return Ordering::Equal;
+            }
+            // Rare case: find the first differing position and compare.
+            for i in 0..a_i8.len() {
+                let (av, bv) = unsafe { (*a_i8.get_unchecked(i), *b_i8.get_unchecked(i)) };
+                if av != bv {
+                    return av.cmp(&bv);
+                }
+            }
+            return Ordering::Equal;
         }
         cmp_unequal_len(a, b)
     }

@@ -278,7 +278,7 @@ impl DataTernary {
         let slice = ternary.to_digit_slice();
         let num_chunks = (len + 4) / 5;
 
-        const WEIGHTS: [i8; 5] = [81, 27, 9, 3, 1]; // 3^4, 3^3, 3^2, 3^1, 3^0
+        const WEIGHTS: [i8; 5] = [81, 27, 9, 3, 1]; // used only for partial leading chunk
 
         let mut chunks = Vec::with_capacity(num_chunks);
 
@@ -298,15 +298,18 @@ impl DataTernary {
             0
         };
 
-        // Remaining full 5-digit chunks.
+        // Remaining full 5-digit chunks: direct indexing lets LLVM eliminate bounds
+        // checks (chunks_exact guarantees len=5) and skip the from_dec range check.
         let tail = &slice[start..];
-        for chunk_slice in tail.chunks_exact(5) {
-            let val: i8 = chunk_slice
-                .iter()
-                .zip(WEIGHTS.iter())
-                .map(|(d, &w)| d.to_i8() * w)
-                .sum();
-            chunks.push(TritsChunk::from_dec(val));
+        for c in tail.chunks_exact(5) {
+            let val = c[0].to_i8() * 81
+                    + c[1].to_i8() * 27
+                    + c[2].to_i8() * 9
+                    + c[3].to_i8() * 3
+                    + c[4].to_i8();
+            // SAFETY: val ∈ [-121, 121] since each trit ∈ {-1,0,1} and
+            // max(|81+27+9+3+1|) = 121.
+            chunks.push(TritsChunk(val));
         }
 
         Self { chunks }
