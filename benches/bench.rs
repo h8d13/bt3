@@ -574,3 +574,40 @@ mod terscii_bench {
         terscii::decode_codes(&encoded).unwrap()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Getrandom
+
+mod getrandom_bench {
+    use balanced_ternary::getrandom::*;
+
+    #[divan::bench]
+    fn rand_digit_bench() -> balanced_ternary::Digit {
+        rand_digit()
+    }
+
+    #[divan::bench(args = [8usize, 40])]
+    fn rand_digits_bench(b: divan::Bencher, n: usize) {
+        b.bench(|| rand_digits(n))
+    }
+
+    #[divan::bench]
+    fn rand_ternary_bench() -> balanced_ternary::Ternary {
+        rand_ternary(40)
+    }
+
+    #[divan::bench]
+    fn rand_bter9_bench() -> balanced_ternary::BTer9 {
+        rand_bter9()
+    }
+
+    #[divan::bench]
+    fn rand_bter27_bench() -> balanced_ternary::BTer27 {
+        rand_bter27()
+    }
+
+    #[divan::bench]
+    fn rand_uter27_bench() -> balanced_ternary::UTer27 {
+        rand_uter27()
+    }
+}

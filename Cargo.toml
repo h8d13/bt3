@@ -10,7 +10,7 @@ categories = ["data-structures", "mathematics", "science", "no-std"]
 repository = "https://github.com/h8d13/bt3"
 
 [features]
-default = ["tryte", "ternary-store", "terscii"]
+default = ["tryte", "ternary-store", "terscii", "getrandom"]
 ternary-store = ["ternary-string"]
 tryte = ["ternary-string"]
 ternary-string = []
