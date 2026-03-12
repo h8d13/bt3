@@ -81,19 +81,73 @@ fn balanced_carry(sum: i8) -> (i8, i8) {
 /// - **No allocations** beyond the result `Vec` (pre-sized with `with_capacity`).
 /// - **No i64 overflow limit** — the output simply grows by one trit if needed.
 /// - **Cache-friendly** — sequential array access, no pointer chasing.
+// Stack buffer fits numbers up to this many trits without heap use during addition.
+const ADD_STACK_CAP: usize = 80;
+
 fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
     let len = a.len().max(b.len());
 
+    // Fast path: write directly into a stack buffer in MSB-first order,
+    // avoiding a post-loop reverse() and drain()-based trim.
+    // scratch[0] holds the potential carry; scratch[1..=len] hold the digits MSB-first.
+    if len <= ADD_STACK_CAP {
+        let mut scratch = [0i8; ADD_STACK_CAP + 1];
+        let mut carry: i8 = 0;
+
+        if a.len() == b.len() {
+            // Hoist negate_b branch outside the hot loop.
+            let mut wi = len;
+            if negate_b {
+                for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+                    let (c, d) = balanced_carry(da.to_i8() - db.to_i8() + carry);
+                    carry = c;
+                    scratch[wi] = d;
+                    wi -= 1;
+                }
+            } else {
+                for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+                    let (c, d) = balanced_carry(da.to_i8() + db.to_i8() + carry);
+                    carry = c;
+                    scratch[wi] = d;
+                    wi -= 1;
+                }
+            }
+        } else {
+            let (oa, ob) = (len - a.len(), len - b.len());
+            for i in (0..len).rev() {
+                let da = if i < oa { 0 } else { a[i - oa].to_i8() };
+                let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
+                if negate_b { db = -db; }
+                let (c, d) = balanced_carry(da + db + carry);
+                carry = c;
+                scratch[i + 1] = d;
+            }
+        }
+        scratch[0] = carry;
+
+        // Find trim start: skip leading zeros, keep at least one digit.
+        let mut start = if carry != 0 { 0 } else { 1 };
+        while start < len && scratch[start] == 0 {
+            start += 1;
+        }
+
+        // Single-pass copy into Vec<Digit> — no reverse, no memmove.
+        let digits = scratch[start..=len]
+            .iter()
+            // SAFETY: balanced_carry output and carry are always in {-1, 0, 1}.
+            .map(|&v| unsafe { core::mem::transmute::<i8, Digit>(v) })
+            .collect();
+        return Ternary::new(digits);
+    }
+
+    // Fallback for operands wider than ADD_STACK_CAP trits.
     let mut digits = Vec::with_capacity(len + 1);
     let mut carry: i8 = 0;
-
-    // Fast path: equal-length operands — eliminates per-iteration branch.
     if a.len() == b.len() {
         for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
             let db_val = if negate_b { -db.to_i8() } else { db.to_i8() };
             let (c, d) = balanced_carry(da.to_i8() + db_val + carry);
             carry = c;
-            // SAFETY: balanced_carry output is in {-1, 0, 1}.
             digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
         }
     } else {
@@ -101,24 +155,16 @@ fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
         for i in (0..len).rev() {
             let da = if i < oa { 0 } else { a[i - oa].to_i8() };
             let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
-            if negate_b {
-                db = -db;
-            }
+            if negate_b { db = -db; }
             let (c, d) = balanced_carry(da + db + carry);
             carry = c;
-            // SAFETY: balanced_carry output is in {-1, 0, 1}.
             digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
         }
     }
-
     if carry != 0 {
-        // SAFETY: balanced_carry carry is in {-1, 0, 1}.
         digits.push(unsafe { core::mem::transmute::<i8, Digit>(carry) });
     }
-
     digits.reverse();
-
-    // Trim leading zeros in-place — `drain` avoids a second allocation.
     let first_nonzero = digits.iter().position(|d| *d != Digit::Zero);
     match first_nonzero {
         None => { digits.truncate(0); digits.push(Digit::Zero); }
