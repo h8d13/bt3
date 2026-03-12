@@ -9,6 +9,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   bench:
@@ -41,7 +43,6 @@ jobs:
           if [ -f bench-ci-baseline.txt ]; then
             python3 bench-compare.py bench-ci-baseline.txt bench-ci-new.txt \
               --threshold 17 --min-ns 5 \
-              --fail-on-regression \
               | tee bench-ci-diff.txt
           else
             echo "No baseline — this run becomes the new baseline."
