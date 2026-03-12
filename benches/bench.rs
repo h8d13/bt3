@@ -550,33 +550,27 @@ mod terscii_bench {
     }
 
     #[divan::bench]
-    fn encode_tryte_h() -> Option<Tryte<5>> {
-        terscii::encode_tryte(divan::black_box('H'))
+    fn encode_code_h() -> Option<terscii::TersciiCode> {
+        terscii::encode_code(divan::black_box('H'))
     }
 
     #[divan::bench]
-    fn decode_tryte_h(b: divan::Bencher) {
-        let th = terscii::encode_tryte('H').unwrap();
-        b.bench(|| terscii::decode_tryte(divan::black_box(th)))
+    fn decode_code_h(b: divan::Bencher) {
+        let ch = terscii::encode_code('H').unwrap();
+        b.bench(|| terscii::decode_code(divan::black_box(ch)))
     }
 
     #[divan::bench]
-    fn roundtrip_tryte(b: divan::Bencher) {
+    fn roundtrip_code(b: divan::Bencher) {
         b.bench(|| {
-            let t = terscii::encode_tryte(divan::black_box('H')).unwrap();
-            terscii::decode_tryte(t)
+            let c = terscii::encode_code(divan::black_box('H')).unwrap();
+            terscii::decode_code(c)
         })
     }
 
     #[divan::bench(sample_count = 50000)]
     fn encode_decode_hello_world() -> String {
-        let encoded: Vec<Tryte<5>> = "Hello, World!"
-            .chars()
-            .map(|c| terscii::encode_tryte(c).unwrap())
-            .collect();
-        encoded
-            .iter()
-            .map(|&t| terscii::decode_tryte(t).unwrap())
-            .collect()
+        let encoded = terscii::encode_str("Hello, World!").unwrap();
+        terscii::decode_codes(&encoded).unwrap()
     }
 }
