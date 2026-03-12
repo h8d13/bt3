@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 [![Rust](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml/badge.svg)](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml)
 
 # BT3 BrainTruck3
@@ -120,3 +121,194 @@ The library supports numerous three-valued logic operations, each of them having
 
 Copyright (c) 2025 [Sébastien GELDREICH](mailto:dev@trehinos.eu)
 `Balanced Ternary` is licensed under the [MIT License](LICENSE).
+=======
+# Balanced Ternary
+
+[![CI](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml/badge.svg)](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml)
+
+A Rust library for manipulating balanced ternary numbers — a numeral system with digits −1, 0, and +1.
+
+Useful in reversible computing, digital signal processing, and three-valued logic modelling.
+
+---
+
+## Features
+
+- **`#![no_std]` compatible** — no standard library required.
+- **Number conversions** — decimal ↔ balanced ternary, unbalanced ternary strings, and display.
+- **Arithmetic** — addition, subtraction, multiplication, division, negation, shifting (`<<`, `>>`), and ternary-native `shu_up` / `shu_down`.
+- **Three-value trit logic** — `and`, `or`, `xor`, `not` (Kleene K3), plus advanced operations from K3, BI3, L3, RM3, HT, paraconsistent, and Post logics.
+- **Multiple storage types** — pick the right representation for your use case (see table below).
+
+---
+
+## Storage types
+
+| Type | Storage | Size | Best for |
+|------|---------|------|----------|
+| `Digit` | `i8` | 1 byte | single trit |
+| `Ternary` | heap `Vec<Digit>` | 1 byte/trit | arbitrary precision |
+| `Tryte<N>` | stack array | N bytes | fixed-size, `Copy`, small values |
+| `DataTernary` | packed `TritsChunk`s | 1 byte per 5 trits | compact storage |
+| `Ter40` | `i64` wrapper | 8 bytes | arithmetic on ≤ 40 trits — add/mul at native i64 speed |
+| `IlTer40` | `u128` interleaved | 16 bytes | trit logic on ≤ 40 trits — AND/OR/XOR/NEG O(1) |
+
+---
+
+## Library features
+
+All features are enabled by default. To select only what you need:
+
+```toml
+[dependencies.balanced-ternary]
+version = "2.1"
+default-features = false
+features = ["ternary-string", "tryte", "ternary-store"]
+```
+
+| Feature | Provides | Requires |
+|---------|----------|----------|
+| *(none)* | `Digit`, `DigitOperate` trait | — |
+| `ternary-string` | `Ternary`, parsing, display | — |
+| `tryte` | `Tryte<N>` | `ternary-string` |
+| `ternary-store` | `DataTernary`, `TritsChunk`, `Ter40`, `IlTer40` | `ternary-string` |
+| `terscii` | ternary character encoding | `ternary-string`, `tryte` |
+
+---
+
+## Examples
+
+### Convert between decimal and balanced ternary
+
+```rust
+use balanced_ternary::*;
+
+let t = Ternary::from_dec(5);
+assert_eq!(t.to_string(), "+--");
+assert_eq!(t.to_dec(), 5);
+
+let t = Ternary::parse("+--");
+assert_eq!(t.to_dec(), 5);
+
+let t = "+-0".parse::<Ternary>().unwrap();
+assert_eq!(t.to_string(), "+-0");
+```
+
+### Arithmetic
+
+```rust
+use balanced_ternary::*;
+
+let a = Ternary::from_dec(9);
+let b = Ternary::from_dec(4);
+let sum = &a + &b;
+assert_eq!(sum.to_string(), "+++");
+assert_eq!(sum.to_dec(), 13);
+```
+
+### Trit-wise logic
+
+```rust
+use balanced_ternary::*;
+
+let a = Ternary::parse("++00");
+let b = Ternary::parse("0+00");
+assert_eq!((&a & &b).to_string(), "0+00");
+
+let a = Ternary::parse("+000");
+let b = Ternary::parse("000-");
+assert_eq!((&a | &b).to_string(), "+000");
+assert_eq!((&a & &b).to_string(), "000-");
+```
+
+### Shifting
+
+```rust
+use balanced_ternary::*;
+
+let t = Ternary::parse("+0-");
+let shifted = &t << 2;
+assert_eq!(shifted.to_string(), "+0-00");
+assert_eq!((&shifted >> 2).to_string(), "+0-");
+```
+
+### Negative numbers
+
+```rust
+use balanced_ternary::*;
+
+let t = Ternary::from_dec(-5);
+assert_eq!(t.to_string(), "-++");
+```
+
+### Iterate through digits
+
+```rust
+use balanced_ternary::*;
+
+let t = Ternary::parse("+0-");
+
+let v: Vec<Digit> = t.iter().cloned().collect();
+assert_eq!(v, vec![Pos, Zero, Neg]);
+
+let v: Vec<Digit> = Ternary::parse("+0-").into_iter().collect();
+assert_eq!(v, vec![Pos, Zero, Neg]);
+```
+
+### Digit operations via `DigitOperate`
+
+```rust
+use balanced_ternary::*;
+
+let t = Ternary::parse("+0-");
+assert_eq!(t.each(Digit::possibly).to_string(), "++-");
+```
+
+### Fast fixed-size types
+
+```rust
+use balanced_ternary::*;
+
+// Ter40: arithmetic at native i64 speed
+let a = Ter40::from_dec(364);
+let b = Ter40::from_dec(91);
+assert_eq!((a + b).to_dec(), 455);
+assert_eq!((a * b).to_dec(), 33124);
+
+// IlTer40: O(1) trit logic on all 40 trits at once
+let p = IlTer40::from_dec(364);
+let q = IlTer40::from_dec(91);
+assert_eq!((p & q).to_dec(), 91);
+assert_eq!((-p).to_dec(), -364);
+```
+
+---
+
+## Three-valued logic operations
+
+The library implements several three-valued logic systems on individual `Digit` values and via `DigitOperate` bulk operations:
+
+| System | Description |
+|--------|-------------|
+| **K3** (Kleene) | Unknown (0) state; basis for `and`, `or`, `not` |
+| **BI3** (Bochvar) | "Nonsense" / undefined value propagation |
+| **L3** (Łukasiewicz) | Degrees of truth; fuzzy-logic compatible |
+| **RM3** (Routley-Meyer) | Paraconsistent; tolerates contradictions |
+| **HT** (Heyting-inspired) | Intermediate / intuitionistic logic |
+| **Post** | Extended classical logic with structured uncertainty |
+
+![Digit operations truth table](digit-operations.png)
+
+---
+
+## Documentation
+
+Full API documentation: [docs.rs/balanced-ternary](https://docs.rs/balanced-ternary)
+
+---
+
+## License
+
+Copyright © 2025 Sébastien GELDREICH
+Licensed under the [MIT License](LICENSE).
+>>>>>>> Stashed changes
