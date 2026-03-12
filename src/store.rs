@@ -583,45 +583,47 @@ const TER40_B20: u64 = 3_486_784_401;
 /// divmod-by-243 on each half — the two chains are independent within the loop.
 #[inline]
 fn i64_to_il40(v: i64) -> u128 {
-    let n    = v.wrapping_add(TER40_BIAS) as u64;
-    let mut lo = (n % TER40_B20) as u32;   // lower 20 trits (fits in u32)
-    let mut hi = (n / TER40_B20) as u32;   // upper 20 trits (fits in u32)
-    let mut wl: u64 = 0;
-    let mut wh: u64 = 0;
-    for k in 0..4u32 {
-        wl |= (CHUNK5[(lo % 243) as usize] as u64) << (10 * k);
-        wh |= (CHUNK5[(hi % 243) as usize] as u64) << (10 * k);
-        lo /= 243;
-        hi /= 243;
-    }
+    let n  = v.wrapping_add(TER40_BIAS) as u64;
+    let lo = (n % TER40_B20) as u32;
+    let hi = (n / TER40_B20) as u32;
+    // Explicit unroll: each divisor (1, 243, 59049, 14348907) is an independent
+    // reciprocal-multiply on lo/hi — no serial chain, OOO can schedule all 8 in parallel.
+    let wl = (CHUNK5[(lo % 243)               as usize] as u64)
+           | ((CHUNK5[((lo /       243) % 243) as usize] as u64) << 10)
+           | ((CHUNK5[((lo /    59_049) % 243) as usize] as u64) << 20)
+           | ((CHUNK5[( lo / 14_348_907)       as usize] as u64) << 30);
+    let wh = (CHUNK5[(hi % 243)               as usize] as u64)
+           | ((CHUNK5[((hi /       243) % 243) as usize] as u64) << 10)
+           | ((CHUNK5[((hi /    59_049) % 243) as usize] as u64) << 20)
+           | ((CHUNK5[( hi / 14_348_907)       as usize] as u64) << 30);
     (wl as u128) | ((wh as u128) << 40)
 }
 
 /// Encode two balanced-ternary i64 values as 40-trit IL u128s simultaneously.
 ///
-/// Splits each value into two u32 halves (20 trits each), yielding **4 independent**
-/// u32 divmod-by-243 chains in the loop body.  An out-of-order CPU can execute all
-/// four in parallel, reducing effective latency to just 4 sequential iterations.
+/// Each 20-trit half is split into four 5-trit groups by dividing the base value
+/// by 1, 243, 59049, 14348907 directly — all independent reciprocal-multiplies on
+/// the same register.  An OOO CPU can schedule all 16 divisions in parallel across
+/// the four quarter-values (alo, ahi, blo, bhi) instead of the former depth-4
+/// serial chain per quarter.
 #[inline(always)]
 fn i64_pair_to_il40(va: i64, vb: i64) -> (u128, u128) {
-    let na = va.wrapping_add(TER40_BIAS) as u64;
-    let nb = vb.wrapping_add(TER40_BIAS) as u64;
-    let mut alo = (na % TER40_B20) as u32;
-    let mut ahi = (na / TER40_B20) as u32;
-    let mut blo = (nb % TER40_B20) as u32;
-    let mut bhi = (nb / TER40_B20) as u32;
-    let mut wal: u64 = 0; let mut wah: u64 = 0;
-    let mut wbl: u64 = 0; let mut wbh: u64 = 0;
-    for k in 0..4u32 {
-        wal |= (CHUNK5[(alo % 243) as usize] as u64) << (10 * k);
-        wah |= (CHUNK5[(ahi % 243) as usize] as u64) << (10 * k);
-        wbl |= (CHUNK5[(blo % 243) as usize] as u64) << (10 * k);
-        wbh |= (CHUNK5[(bhi % 243) as usize] as u64) << (10 * k);
-        alo /= 243; ahi /= 243;
-        blo /= 243; bhi /= 243;
+    let na  = va.wrapping_add(TER40_BIAS) as u64;
+    let nb  = vb.wrapping_add(TER40_BIAS) as u64;
+    let alo = (na % TER40_B20) as u32;
+    let ahi = (na / TER40_B20) as u32;
+    let blo = (nb % TER40_B20) as u32;
+    let bhi = (nb / TER40_B20) as u32;
+    macro_rules! enc {
+        ($x:expr) => {
+            (CHUNK5[($x % 243)               as usize] as u64)
+          | ((CHUNK5[(($x /       243) % 243) as usize] as u64) << 10)
+          | ((CHUNK5[(($x /    59_049) % 243) as usize] as u64) << 20)
+          | ((CHUNK5[( $x / 14_348_907)       as usize] as u64) << 30)
+        }
     }
-    ((wal as u128) | ((wah as u128) << 40),
-     (wbl as u128) | ((wbh as u128) << 40))
+    ((enc!(alo) as u128) | ((enc!(ahi) as u128) << 40),
+     (enc!(blo) as u128) | ((enc!(bhi) as u128) << 40))
 }
 
 /// Decode a 40-trit IL u128 back to a balanced-ternary i64.
