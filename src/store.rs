@@ -2823,12 +2823,13 @@ impl BTer27 {
     }
 
     #[inline] pub fn to_dec(&self) -> i64 {
-        let mut val = 0i64;
-        for k in (0..27u32).rev() {
-            let code = (self.0 >> (2 * k)) & 3;
-            val = val * 3 + code as i64 - 1;
-        }
-        val
+        // Three independent 9-trit groups — LLVM schedules all three Horner
+        // chains in parallel via ILP instead of one serial 27-step chain.
+        let w = self.0;
+        let lo  = BTer9((w         & MASK9 as u64) as u32).to_dec() as i64;
+        let mid = BTer9(((w >> 18) & MASK9 as u64) as u32).to_dec() as i64;
+        let hi  = BTer9(((w >> 36) & MASK9 as u64) as u32).to_dec() as i64;
+        lo + mid * 19683 + hi * (19683 * 19683)
     }
 
     #[inline(always)] pub const fn raw(self) -> u64 { self.0 }
