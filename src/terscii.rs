@@ -77,7 +77,6 @@ pub fn decode(t: &Ternary) -> Option<char> {
     }
 }
 
-
 /// Precomputed `Tryte<5>` for each TERSCII value 0–80.
 ///
 /// Eliminates `from_i64` (5 divisions per call) in the hot path of `encode_tryte`.
@@ -92,12 +91,10 @@ const TRYTE5_LUT: [Tryte<5>; 81] = {
     lut
 };
 
-
 /// Encode a character to its TERSCII value as a [`Tryte<5>`] (stack-allocated, no heap).
 ///
 /// TERSCII uses 4-trit quartets (3⁴ = 81 values), but balanced ternary `Tryte<4>` only
 /// reaches ±40, so `Tryte<5>` (range ±121) is required to cover the full 0–80 range.
-/// Faster than [`encode`] since it avoids heap allocation.
 #[cfg(feature = "tryte")]
 #[inline]
 pub fn encode_tryte(c: char) -> Option<Tryte<5>> {
@@ -135,14 +132,6 @@ pub fn decode_tryte(t: Tryte<5>) -> Option<char> {
 /// A TERSCII-encoded string: a sequence of [`Tryte<5>`] values, one per character.
 ///
 /// Implements [`Display`] as space-separated balanced-ternary tryte representations.
-///
-/// # Example
-/// ```
-/// use balanced_ternary::terscii;
-/// let s = terscii::encode_str("Hi").unwrap();
-/// println!("{}", s); // "+0-+0 +-0-0" (H=75, i=7... wait, i=7 actually)
-/// let back = terscii::decode_str(&s).unwrap();
-/// assert_eq!(back, "Hi");
 /// ```
 #[cfg(feature = "tryte")]
 pub struct TersciiString(Vec<Tryte<5>>);

@@ -1661,10 +1661,35 @@ const MASK_L: u64 = 0x5555_5555_5555_5555;
 /// High bits of each 2-bit trit pair (bits 1,3,5,...,63).
 const MASK_H: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 
+/// Precomputed table: byte value (0–255) → its 8 bits spread to even positions of a u16.
+///
+/// `SPREAD_BYTE_LUT[b]` = bit `i` of `b` placed at position `2*i` of the result.
+/// Four lookups + ORs replace the 5-step serial Morton chain in `spread_u32`,
+/// breaking the sequential data dependency and enabling ILP.
+#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
+const SPREAD_BYTE_LUT: [u16; 256] = {
+    let mut lut = [0u16; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        let mut result = 0u16;
+        let mut bit = 0;
+        while bit < 8 {
+            if (b >> bit) & 1 != 0 {
+                result |= 1u16 << (bit * 2);
+            }
+            bit += 1;
+        }
+        lut[b] = result;
+        b += 1;
+    }
+    lut
+};
+
 /// Spread the 32 bits of `x` to the even-indexed bit positions (0,2,4,...,62) of a u64.
 ///
 /// On x86-64 with BMI2, this compiles to a single `PDEP` instruction.
-/// Otherwise falls back to the standard 5-step Morton code interleave.
+/// Otherwise splits `x` into 4 bytes and uses `SPREAD_BYTE_LUT` for each —
+/// four independent loads (vs. the 5-step serial Morton chain) exploit ILP.
 /// The inverse is `compact_u64`.
 #[inline(always)]
 fn spread_u32(x: u32) -> u64 {
@@ -1674,13 +1699,10 @@ fn spread_u32(x: u32) -> u64 {
 
     #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
     {
-        let mut x = x as u64;
-        x = (x | (x << 16)) & 0x0000_FFFF_0000_FFFF;
-        x = (x | (x <<  8)) & 0x00FF_00FF_00FF_00FF;
-        x = (x | (x <<  4)) & 0x0F0F_0F0F_0F0F_0F0F;
-        x = (x | (x <<  2)) & 0x3333_3333_3333_3333;
-        x = (x | (x <<  1)) & 0x5555_5555_5555_5555;
-        x
+          SPREAD_BYTE_LUT[(x        & 0xFF) as usize] as u64
+        | (SPREAD_BYTE_LUT[((x >>  8) & 0xFF) as usize] as u64) << 16
+        | (SPREAD_BYTE_LUT[((x >> 16) & 0xFF) as usize] as u64) << 32
+        | (SPREAD_BYTE_LUT[ (x >> 24)         as usize] as u64) << 48
     }
 }
 
