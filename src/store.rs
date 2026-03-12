@@ -696,15 +696,22 @@ const fn il40_or(a: u128, b: u128) -> u128 {
 }
 
 /// O(1) trit-wise XOR (−a·b) on 40-trit IL u128.
+///
+/// # Optimization: `new_l = la | lb`
+///
+/// IL encoding: Neg=(h=0,l=0), Zero=(h=0,l=1), Pos=(h=1,l=0).
+/// The result l-bit (marks Zero=1, Neg/Pos=0) equals `la | lb`:
+/// - If la=1 (a=Zero) or lb=1 (b=Zero): result is always Zero → l=1.
+/// - If la=lb=0 (both non-Zero): result is Pos (new_h=1) or Neg (new_h=0) → l=0.
+/// This eliminates `is_neg` and `MASK_L40 & !new_h & !is_neg` (6 u128 ops fewer).
 #[inline(always)]
 const fn il40_xor(a: u128, b: u128) -> u128 {
     let ha = (a >> 1) & MASK_L40; let la = a & MASK_L40;
     let hb = (b >> 1) & MASK_L40; let lb = b & MASK_L40;
-    let neg_a = MASK_L40 & !ha & !la;
-    let neg_b = MASK_L40 & !hb & !lb;
+    let neg_a = MASK_L40 & !(ha | la);
+    let neg_b = MASK_L40 & !(hb | lb);
     let new_h = (ha & neg_b) | (neg_a & hb);
-    let is_neg = (ha & hb) | (neg_a & neg_b);
-    let new_l = MASK_L40 & !new_h & !is_neg;
+    let new_l = la | lb;
     (new_h << 1) | new_l
 }
 
@@ -713,8 +720,8 @@ const fn il40_xor(a: u128, b: u128) -> u128 {
 const fn il40_consensus(a: u128, b: u128) -> u128 {
     let ha = (a >> 1) & MASK_L40; let la = a & MASK_L40;
     let hb = (b >> 1) & MASK_L40; let lb = b & MASK_L40;
-    let neg_a = MASK_L40 & !ha & !la;
-    let neg_b = MASK_L40 & !hb & !lb;
+    let neg_a = MASK_L40 & !(ha | la);
+    let neg_b = MASK_L40 & !(hb | lb);
     let new_h = ha & hb;
     let is_neg = neg_a & neg_b;
     let new_l = MASK_L40 & !new_h & !is_neg;
@@ -726,10 +733,10 @@ const fn il40_consensus(a: u128, b: u128) -> u128 {
 const fn il40_accept_anything(a: u128, b: u128) -> u128 {
     let ha = (a >> 1) & MASK_L40; let la = a & MASK_L40;
     let hb = (b >> 1) & MASK_L40; let lb = b & MASK_L40;
-    let neg_a = MASK_L40 & !ha & !la;
-    let neg_b = MASK_L40 & !hb & !lb;
     let not_neg_a = ha | la;
+    let neg_a = MASK_L40 & !not_neg_a;
     let not_neg_b = hb | lb;
+    let neg_b = MASK_L40 & !not_neg_b;
     let not_pos_a = (MASK_L40 & !ha) | la;
     let not_pos_b = (MASK_L40 & !hb) | lb;
     let new_h = (ha & not_neg_b) | (hb & not_neg_a);
