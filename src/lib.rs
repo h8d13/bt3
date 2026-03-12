@@ -1501,7 +1501,6 @@ fn test_operations() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_from_str() {
-    use alloc::string::ToString;
     use core::str::FromStr;
 
     let ternary = Ternary::from_str("+-0").unwrap();
