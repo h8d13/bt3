@@ -543,6 +543,11 @@ impl From<DataTernary> for Ternary {
 
 /// Low bits of each 2-bit pair for 40 trits (bits 0,2,4,...,78 in u128).
 const MASK_L40: u128 = 0x0000_0000_0000_5555_5555_5555_5555_5555;
+/// High bits of each 2-bit pair for 40 trits: all trits = +1 (IL code `10`).
+/// Jones `TER40_NEG`: per-trit negation is simply `MASK_H40 − a` (one subtraction).
+/// Each trit-pair has MASK = `10₂ = 2` and valid codes ∈ {00,01,10} (all ≤ 2),
+/// so no borrow ever propagates between trit pairs.
+const MASK_H40: u128 = MASK_L40 << 1;
 
 /// Bias so balanced ternary v maps to unsigned 40-trit n = v + BIAS40 ≥ 0.
 /// BIAS40 = (3^40 − 1) / 2 = 6_078_832_729_528_464_400.
@@ -666,13 +671,12 @@ fn il40_to_i64(w: u128) -> i64 {
 }
 
 /// O(1) trit-wise negation on 40-trit IL u128.
+///
+/// Jones `TER40_NEG`: one subtraction, identical to `MASK27_H − b` for BTer27.
+/// Each trit position has MASK = `10₂`, valid codes ≤ 2, so no inter-trit borrow.
 #[inline(always)]
 const fn il40_neg(a: u128) -> u128 {
-    let h = (a >> 1) & MASK_L40;
-    let l =  a       & MASK_L40;
-    let new_h = !(h | l) & MASK_L40;
-    let new_l = !h & l & MASK_L40;
-    (new_h << 1) | new_l
+    MASK_H40 - a
 }
 
 /// O(1) trit-wise AND (min) on 40-trit IL u128.
