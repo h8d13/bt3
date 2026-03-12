@@ -81,6 +81,19 @@ impl TersciiCode {
              self.0       & 3,
         ]
     }
+
+    /// Returns the TERSCII decimal value (0–80).
+    #[inline]
+    pub const fn to_dec(self) -> u8 {
+        let d = self.digits();
+        d[0] * 27 + d[1] * 9 + d[2] * 3 + d[3]
+    }
+
+    /// Converts to the equivalent balanced [`Ternary`] value.
+    #[inline]
+    pub fn to_ternary(self) -> Ternary {
+        Ternary::from_dec(self.to_dec() as i64)
+    }
 }
 
 impl core::fmt::Display for TersciiCode {
@@ -223,6 +236,77 @@ pub fn decode_codes(codes: &[TersciiCode]) -> Option<alloc::string::String> {
         unsafe { s.as_mut_vec().push(byte); }
     }
     Some(s)
+}
+
+/// Precomputed balanced ternary digit string for each TERSCII value 0–80.
+///
+/// Each entry is `(bytes, len)`: `bytes[..len]` is the +/0/- ASCII representation,
+/// MSB first, with no leading zeros (except `"0"` for value 0).
+const BALANCED_LUT: [([u8; 5], u8); 81] = {
+    const fn digit_char(d: i64) -> u8 {
+        if d > 0 { b'+' } else if d < 0 { b'-' } else { b'0' }
+    }
+    const fn entry(v: u8) -> ([u8; 5], u8) {
+        if v == 0 { return ([b'0', 0, 0, 0, 0], 1); }
+        let mut raw = [0i64; 5];
+        let mut n = v as i64;
+        let mut cnt = 0usize;
+        while n != 0 {
+            let r = ((n % 3) + 3) % 3;
+            let t = if r <= 1 { r } else { r - 3 };
+            raw[cnt] = t;
+            n = (n - t) / 3;
+            cnt += 1;
+        }
+        let mut buf = [0u8; 5];
+        let mut j = 0;
+        while j < cnt {
+            buf[j] = digit_char(raw[cnt - 1 - j]);
+            j += 1;
+        }
+        (buf, cnt as u8)
+    }
+    let mut lut = [([0u8; 5], 0u8); 81];
+    let mut i = 0;
+    while i < 81 { lut[i] = entry(i as u8); i += 1; }
+    lut
+};
+
+/// Format a slice of [`TersciiCode`]s as space-separated 4-digit unbalanced ternary (`"2210 1220 …"`).
+///
+/// # Performance
+/// Single allocation; writes 4 ASCII bytes per code directly, no format machinery.
+pub fn unbalanced_str(codes: &[TersciiCode]) -> alloc::string::String {
+    if codes.is_empty() { return alloc::string::String::new(); }
+    let mut s = alloc::string::String::with_capacity(codes.len() * 5 - 1);
+    // SAFETY: we push only ASCII bytes (b'0'..=b'2' and b' '), so the Vec is valid UTF-8.
+    let buf = unsafe { s.as_mut_vec() };
+    for (i, &code) in codes.iter().enumerate() {
+        if i != 0 { buf.push(b' '); }
+        let d = code.digits();
+        buf.push(b'0' + d[0]);
+        buf.push(b'0' + d[1]);
+        buf.push(b'0' + d[2]);
+        buf.push(b'0' + d[3]);
+    }
+    s
+}
+
+/// Format a slice of [`TersciiCode`]s as space-separated balanced ternary (`"+0-+0 +-0-0 …"`).
+///
+/// # Performance
+/// Single allocation; uses a precomputed LUT — no per-code heap alloc, no format machinery.
+pub fn balanced_str(codes: &[TersciiCode]) -> alloc::string::String {
+    if codes.is_empty() { return alloc::string::String::new(); }
+    let mut s = alloc::string::String::with_capacity(codes.len() * 6 - 1);
+    // SAFETY: BALANCED_LUT contains only ASCII bytes (b'+', b'-', b'0').
+    let buf = unsafe { s.as_mut_vec() };
+    for (i, &code) in codes.iter().enumerate() {
+        if i != 0 { buf.push(b' '); }
+        let (bytes, len) = BALANCED_LUT[code.to_dec() as usize];
+        buf.extend_from_slice(&bytes[..len as usize]);
+    }
+    s
 }
 
 #[cfg(test)]

@@ -985,4 +985,18 @@ fn bench_terscii() {
         }
         std::hint::black_box(buf);
     });
+
+    println!("\n--- TersciiCode helpers ---");
+    bench("TersciiCode::to_ternary('H')  (BCT4 → Ternary)", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ch).to_ternary());
+    });
+    {
+        let hello = terscii::encode_str("Hello, World!").unwrap();
+        bench("terscii::unbalanced_str (13 codes → String)", ITERS / 10, || {
+            std::hint::black_box(terscii::unbalanced_str(std::hint::black_box(&hello)));
+        });
+        bench("terscii::balanced_str   (13 codes → String)", ITERS / 10, || {
+            std::hint::black_box(terscii::balanced_str(std::hint::black_box(&hello)));
+        });
+    }
 }
