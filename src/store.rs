@@ -2776,13 +2776,13 @@ impl BTer9 {
     pub const MIN:  Self = Self(0);        // all 00 = −1 → −9841
 
     #[inline] pub fn from_dec(v: i32) -> Self {
-        // Unrolled: all 3 quotients computed from the original n directly —
-        // independent reciprocal-multiplies, no serial chain.
+        // 2-group UTER5_LUT: same pattern as UTer9::from_dec.
+        // n = v + BIAS maps BTer9's balanced range to unsigned 0..19682 (= 3^9−1),
+        // identical to UTer9's range; UTER5_LUT encodes 5 trits per lookup.
         let n = (v + BTER9_BIAS as i32) as u32;
-        let word = (CHUNK3[(n % 27)         as usize] as u32)
-                 | ((CHUNK3[((n / 27) % 27) as usize] as u32) <<  6)
-                 | ((CHUNK3[(n / 729)        as usize] as u32) << 12);
-        Self(word)
+        let lo = UTER5_LUT[(n % 243)  as usize] as u32;
+        let hi = UTER5_LUT[(n / 243)  as usize] as u32; // n/243 < 82
+        Self(lo | (hi << 10))
     }
 
     #[inline] pub fn to_dec(&self) -> i32 {
@@ -2878,23 +2878,22 @@ impl BTer27 {
     pub const MIN:  Self = Self(0);
 
     #[inline] pub fn from_dec(v: i64) -> Self {
-        // Split into three independent 9-trit groups — mirrors BTer27::to_dec.
-        // Two 64-bit divisions extract lo/mid/hi from n; then each group uses
-        // three independent 32-bit divisions (BTer9::from_dec unroll), giving
-        // much better ILP with smaller code than 9 serial 64-bit divmod-27 steps.
+        // # Optimization: 6-group UTER5_LUT (same pattern as UTer27::from_dec)
+        //
+        // After adding BIAS, v maps to an unsigned value n ∈ 0..3^27−1, the same
+        // range as UTer27.  BTer27 and UTer27 share identical IL bit encoding
+        // ({-1,0,+1} → {00,01,10} = unsigned {0,1,2} → same 2-bit codes), so
+        // UTER5_LUT applies directly: one bias-add then six independent
+        // 5-trit lookups — no serial divmod chain, no 3-group split.
         const BIAS: i64 = 3_812_798_742_493; // (3^27 - 1) / 2
         let n = (v + BIAS) as u64;
-        // lo/mid/hi are independent; hi needs only one 64-bit division.
-        let lo  = (n % 19683) as u32;                   // 3^9 = 19683
-        let mid = ((n / 19683) % 19683) as u32;
-        let hi  = (n / 387_420_489) as u32;             // 19683^2
-        // Each group: 3 independent u32 divmod-27 lookups (same as BTer9::from_dec).
-        macro_rules! enc9 { ($m:expr) => {
-            (CHUNK3[($m % 27)         as usize] as u64)
-          | ((CHUNK3[(($m / 27) % 27) as usize] as u64) <<  6)
-          | ((CHUNK3[($m / 729)       as usize] as u64) << 12)
-        }}
-        Self(enc9!(lo) | (enc9!(mid) << 18) | (enc9!(hi) << 36))
+        let word = (UTER5_LUT[(n % 243)                         as usize] as u64)
+                 | ((UTER5_LUT[((n /        243) % 243)         as usize] as u64) << 10)
+                 | ((UTER5_LUT[((n /      59049) % 243)         as usize] as u64) << 20)
+                 | ((UTER5_LUT[((n /   14348907) % 243)         as usize] as u64) << 30)
+                 | ((UTER5_LUT[((n / 3486784401) % 243)         as usize] as u64) << 40)
+                 | ((UTER5_LUT[(n / 847288609443)               as usize] as u64) << 50);
+        Self(word)
     }
 
     #[inline] pub fn to_dec(&self) -> i64 {
