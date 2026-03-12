@@ -1,5 +1,11 @@
-# Align all function entry points to a 64-byte cache line boundary.
-# Prevents layout shifts in .text from causing benchmark noise when
-# any function changes size.
+# Align all function entry points AND all non-fallthrough block targets
+# (loop headers, branch targets) to 64-byte cache line boundaries.
+# -align-all-functions=64         : function entries always cache-line aligned
+# -align-all-nofallthru-blocks=64 : loop headers/branch targets always aligned
+# Together these prevent LTO layout shifts from moving hot inner loops to
+# bad cache-line positions when any function's code size changes.
 [build]
-rustflags = ["-C", "llvm-args=-align-all-functions=64"]
+rustflags = [
+  "-C", "llvm-args=-align-all-functions=64",
+  "-C", "llvm-args=-align-all-nofallthru-blocks=64",
+]

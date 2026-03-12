@@ -158,19 +158,46 @@ impl core::fmt::Display for TersciiString {
 /// Encode a string into a [`TersciiString`].
 ///
 /// Returns `None` if any character is not in the TERSCII table.
+///
+/// # Optimization: bytes() + pre-allocated Vec
+///
+/// TERSCII only accepts ASCII characters (code points < 128). Using
+/// `bytes()` instead of `chars()` avoids UTF-8 multi-byte decode overhead
+/// and provides an exact size_hint so the Vec is pre-allocated once.
+/// Non-ASCII bytes still return `None` because `encode_tryte` rejects any
+/// input ≥ 128 via the `ENCODE_LUT` bounds check.
 #[cfg(feature = "tryte")]
 #[inline]
 pub fn encode_str(s: &str) -> Option<TersciiString> {
-    s.chars().map(encode_tryte).collect::<Option<Vec<_>>>().map(TersciiString)
+    let mut v = Vec::with_capacity(s.len());
+    for b in s.bytes() {
+        v.push(encode_tryte(b as char)?);
+    }
+    Some(TersciiString(v))
 }
 
 /// Decode a [`TersciiString`] (or `&[Tryte<5>]`) back to a [`String`].
 ///
 /// Returns `None` if any value is outside 0–80.
+///
+/// # Optimization: pre-allocated String + direct byte write
+///
+/// All TERSCII characters are ASCII (code points 0–80, all < 128), so the
+/// output String always has exactly one byte per tryte. Pre-allocating with
+/// the exact capacity and writing bytes directly avoids the UTF-8 encode
+/// overhead of `String::push(char)` and any reallocation.
 #[cfg(feature = "tryte")]
 #[inline]
 pub fn decode_str(trytes: &[Tryte<5>]) -> Option<String> {
-    trytes.iter().map(|&t| decode_tryte(t)).collect()
+    let mut s = String::with_capacity(trytes.len());
+    for &t in trytes {
+        // SAFETY: all TERSCII chars are ASCII (TABLE contains only bytes
+        // in 0x00–0x7A), so casting the char to u8 preserves its value and
+        // the resulting byte sequence is valid UTF-8.
+        let c = decode_tryte(t)? as u8;
+        unsafe { s.as_mut_vec().push(c); }
+    }
+    Some(s)
 }
 
 #[cfg(test)]
