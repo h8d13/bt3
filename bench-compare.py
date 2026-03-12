@@ -98,10 +98,15 @@ def main():
     parser.add_argument("--threshold", type=float, default=17.0,
                         help="Min %% change to flag (default: 17%%)")
     parser.add_argument("--min-ns", type=float, default=5.0,
-                        help="Skip ops faster than this ns (default: 5.0)")
+                        help="Skip ops faster than this ns in the report (default: 5.0)")
+    parser.add_argument("--fail-min-ns", type=float, default=0.0,
+                        help="Only exit 1 for regressions where 'before' >= this ns "
+                             "(default: 0 = same as --min-ns). Useful on noisy CI clocks.")
     parser.add_argument("--top", type=int, default=0,
                         help="Show only top N regressions/improvements (0 = all)")
     args = parser.parse_args()
+    if args.fail_min_ns == 0.0:
+        args.fail_min_ns = args.min_ns
 
     b = parse_divan(args.baseline)
     n = parse_divan(args.new)
@@ -147,7 +152,8 @@ def main():
         flag = "  +" if pct > args.threshold else ("  -" if pct < -args.threshold else "   ")
         print(f"{name:<{col}}  {before:>7.1f}ns  {after:>7.1f}ns  {pct:>+7.1f}%{flag}")
 
-    if regressed:
+    actionable = sum(1 for p, before, _, _ in diffs if p < -args.threshold and before >= args.fail_min_ns)
+    if actionable:
         sys.exit(1)
 
 

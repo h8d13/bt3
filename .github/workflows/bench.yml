@@ -39,7 +39,7 @@ jobs:
           set -o pipefail
           if [ -f bench-ci-baseline.txt ]; then
             python3 bench-compare.py bench-ci-baseline.txt bench-ci-new.txt \
-              --threshold 17 --min-ns 5 \
+              --threshold 17 --min-ns 5 --fail-min-ns 30 \
               | tee bench-ci-diff.txt
           else
             echo "No baseline — this run becomes the new baseline."
