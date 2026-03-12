@@ -47,15 +47,6 @@ jobs:
             echo "No baseline — this run becomes the new baseline."
             cp bench-ci-new.txt bench-ci-diff.txt
           fi
-
-      - name: Write job summary
-        if: always()
-        run: |
-          echo '## Benchmark results' >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cat bench-ci-diff.txt >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-
       # Update stored baseline only on master pushes.
       - name: Save baseline cache
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/master'
