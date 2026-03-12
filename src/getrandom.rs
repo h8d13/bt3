@@ -237,3 +237,112 @@ pub fn rand_uter27() -> UTer27 {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// SplitMix64 PRNG — one-shot getrandom seed, then O(1) per call
+// ---------------------------------------------------------------------------
+
+/// Fast pseudo-random number generator seeded from one `getrandom` syscall.
+///
+/// Uses the **SplitMix64** algorithm (Blackman & Vigna 2018), which passes
+/// BigCrush / PractRand.  Period is 2^64.  **Not** cryptographically secure —
+/// use the standalone `rand_bter27()` / `rand_uter27()` functions if you need
+/// unpredictable output.
+///
+/// # Example
+///
+/// ```
+/// use balanced_ternary::getrandom::SplitMix64;
+///
+/// let mut rng = SplitMix64::new();
+/// let _ = rng.next_u64();
+/// ```
+pub struct SplitMix64(u64);
+
+impl SplitMix64 {
+    /// Seed from the kernel's entropy pool — **one** `getrandom` syscall.
+    /// Subsequent calls to `next_u64` / `rand_*` make no syscalls.
+    pub fn new() -> Self {
+        let mut buf = [0u8; 8];
+        getrandom_bytes(&mut buf);
+        let seed = u64::from_le_bytes(buf);
+        Self(if seed == 0 { 0x9e3779b97f4a7c15 } else { seed })
+    }
+
+    /// Create a deterministic PRNG from a fixed seed — **no** syscall, no entropy.
+    pub const fn from_seed(seed: u64) -> Self {
+        Self(if seed == 0 { 1 } else { seed })
+    }
+
+    /// Draw the next 64 pseudo-random bits (~1 ns, no syscall).
+    #[inline]
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+        z ^ (z >> 31)
+    }
+
+    /// Draw the next 32 pseudo-random bits.
+    #[inline]
+    pub fn next_u32(&mut self) -> u32 {
+        self.next_u64() as u32
+    }
+
+    /// Random [`BTer9`] uniform over −9841..+9841.  No syscall after construction.
+    ///
+    /// Rejection rate < 0.0005 % (2^32 mod 3^9 / 2^32); in practice always one iteration.
+    #[cfg(feature = "ternary-store")]
+    pub fn rand_bter9(&mut self) -> BTer9 {
+        const RANGE: u32 = 19683; // 3^9
+        const CUTOFF: u32 = u32::MAX - u32::MAX % RANGE;
+        loop {
+            let v = self.next_u32();
+            if v < CUTOFF {
+                return BTer9::from_dec((v % RANGE) as i32 - 9841);
+            }
+        }
+    }
+
+    /// Random [`UTer9`] uniform over 0..19682.  No syscall after construction.
+    #[cfg(feature = "ternary-store")]
+    pub fn rand_uter9(&mut self) -> UTer9 {
+        const RANGE: u32 = 19683;
+        const CUTOFF: u32 = u32::MAX - u32::MAX % RANGE;
+        loop {
+            let v = self.next_u32();
+            if v < CUTOFF {
+                return UTer9::from_dec(v % RANGE);
+            }
+        }
+    }
+
+    /// Random [`BTer27`] uniform over ±3762798742493.  No syscall after construction.
+    ///
+    /// Uses full u64 space → rejection rate < 0.00005 %; essentially always one iteration.
+    #[cfg(feature = "ternary-store")]
+    pub fn rand_bter27(&mut self) -> BTer27 {
+        const RANGE: u64 = 7_625_597_484_987; // 3^27
+        const CUTOFF: u64 = u64::MAX - u64::MAX % RANGE;
+        loop {
+            let v = self.next_u64();
+            if v < CUTOFF {
+                return BTer27::from_dec((v % RANGE) as i64 - 3_812_798_742_493);
+            }
+        }
+    }
+
+    /// Random [`UTer27`] uniform over 0..7625597484986.  No syscall after construction.
+    #[cfg(feature = "ternary-store")]
+    pub fn rand_uter27(&mut self) -> UTer27 {
+        const RANGE: u64 = 7_625_597_484_987;
+        const CUTOFF: u64 = u64::MAX - u64::MAX % RANGE;
+        loop {
+            let v = self.next_u64();
+            if v < CUTOFF {
+                return UTer27::from_dec(v % RANGE);
+            }
+        }
+    }
+}

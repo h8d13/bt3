@@ -677,4 +677,24 @@ mod getrandom_bench {
     fn rand_uter27_bench() -> balanced_ternary::UTer27 {
         rand_uter27()
     }
+
+    // --- SplitMix64 PRNG variants (one-shot seed, no per-call syscall) ---
+
+    #[divan::bench]
+    fn splitmix64_next_u64(b: divan::Bencher) {
+        let mut rng = SplitMix64::new();
+        b.bench_local(|| rng.next_u64())
+    }
+
+    #[divan::bench]
+    fn splitmix64_rand_bter27(b: divan::Bencher) {
+        let mut rng = SplitMix64::new();
+        b.bench_local(|| rng.rand_bter27())
+    }
+
+    #[divan::bench]
+    fn splitmix64_rand_uter27(b: divan::Bencher) {
+        let mut rng = SplitMix64::new();
+        b.bench_local(|| rng.rand_uter27())
+    }
 }
