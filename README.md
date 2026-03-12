@@ -2,11 +2,11 @@
 
 # BT3 BrainTruck3
 
-**BT3** is a Rust library for manipulating **[balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary)** a numeral system with digits `-1`, `0`, and `+1`.
+**BT3** is a Rust library for manipulating **[balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary)**.
 
-This system is particularly useful in specialized computing applications such as reversible computing, digital signal processing, and three-valued logic modeling. 
+This system is particularly useful in specialized computing applications such as reversible computing, digital signal processing, and three-valued logic modeling.
 
-This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/balanced-ternary) with additional fixed-width types, unsigned ternary types following [Jones's design](https://homepage.divms.uiowa.edu/~jones/ternary/), TERSCII encoding, and significant performance improvements throughout.
+This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/balanced-ternary) with additional fixed-width types, unsigned ternary types following TERSCII encoding, and significant performance improvements throughout.
 
 ## Features
 
@@ -17,6 +17,8 @@ This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/
     - Support for bitwise and, or, xor, and not (in Kleene algebra (K3)).
     - **Advanced logic**: Implementation of
       [K3](https://en.wikipedia.org/wiki/De_Morgan_algebra#Kleene_algebra),
+      [Jones's designs](https://homepage.divms.uiowa.edu/~jones/ternary/),
+      [Morton Bit-tricks](https://github.com/Forceflow/libmorton)
       [BI3](https://en.wikipedia.org/wiki/Many-valued_logic#Bochvar's_internal_three-valued_logic),
       [L3](https://en.wikipedia.org/wiki/%C5%81ukasiewicz_logic),
       [RM3](https://en.wikipedia.org/wiki/Paraconsistent_logic#An_ideal_three-valued_paraconsistent_logic),
@@ -87,34 +89,9 @@ Choosing the right type for your use case matters:
 - **O(1) arithmetic + logic combined** → `IlBctTer32` / `UTer9` / `UTer27`
 - **Unsigned base-3 counting** → `UTer9` / `UTer27` (BCT addition via Jones BCD trick)
 
-## Three-valued logic
+## Digit Ops
 
-The library supports numerous three-valued logic operations, each of them having its own specificities:
-
-- **K3** (Kleene logic)
-  A three-valued logic that introduces an "unknown" (0) state, useful for dealing with partial information.
-- **BI3** (Bochvar logic)
-  A logic designed to handle "nonsense" or meaningless statements, where 0 represents an invalid or undefined value.
-- **L3** (Łukasiewicz logic)
-  A non-classical logic allowing for degrees of truth, often used in fuzzy logic and multi-valued reasoning.
-- **RM3** (Routley-Meyer paraconsistent logic)
-  A logic that tolerates contradictions without collapsing into triviality, useful in paraconsistent reasoning.
-- **HT** (Heyting logic-inspired ternary system)
-  A variant of intermediate logic, often related to intuitionistic logic and constructive reasoning.
-- **Paraconsistent logic**
-  A logic framework that avoids the principle of explosion, allowing systems to work with contradictory information.
-- **Post logic**
-  A logical system that extends classical logic with additional operators to handle uncertainty in a structured way.
-- **Consensus** (`a · (a == b)`)
-  Keeps the trit value where both operands agree, `Zero` elsewhere. Useful for extracting shared information from two ternary words.
-- **Accept-anything** (`sign(a + b)`)
-  The non-zero trit wins; two conflicting non-zero trits resolve to `Zero`. Lets two ternary words with non-overlapping fields be merged losslessly.
-- **Decoders** (`is_neg`, `is_zero`, `is_pos`)
-  Return `Pos` when the trit matches the named value, `Neg` otherwise. Jones NTI / K / PTI indicator functions.
-- **Clamps** (`clamp_down`, `clamp_up`)
-  Suppress one polarity: `clamp_down` is min with Zero, `clamp_up` is max with Zero. Branchless via arithmetic right shift.
-- **Equality**
-  Returns `Pos` if both trits are equal, `Neg` otherwise: a per-trit equality test.
+![Original Image](digit-operations.png)
 
 ## License
 
