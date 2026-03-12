@@ -1,6 +1,5 @@
 use crate::concepts::DigitOperate;
 use crate::{Digit, Ternary};
-use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt::Display;
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Shl, Shr, Sub};

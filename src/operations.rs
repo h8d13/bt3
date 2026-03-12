@@ -417,7 +417,6 @@ impl Not for &Ternary {
 #[cfg(test)]
 #[test]
 fn test_ternary_ops() {
-    use alloc::string::ToString;
 
     let repr9 = Ternary::parse("+00");
     let repr4 = Ternary::parse("++");
@@ -460,7 +459,6 @@ fn test_ternary_ops() {
 #[cfg(test)]
 #[test]
 fn test_shift_ops() {
-    use alloc::string::ToString;
     let t = Ternary::parse("+0-");
     assert_eq!((&t << 2).to_string(), "+0-00");
     let back = &(&t << 2) >> 2;

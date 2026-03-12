@@ -1032,6 +1032,34 @@ impl Ternary {
         digits.extend_from_slice(&other.digits);
         Ternary::new(digits)
     }
+
+    /// Converts the balanced ternary number to its canonical string representation.
+    ///
+    /// # Optimization: direct byte writes, bypass `fmt` machinery
+    ///
+    /// `to_string()` via `Display` routes through `fmt::format` which starts
+    /// with `String::new()` (capacity 0) and then reallocates when our
+    /// `write_str` delivers all bytes at once.  This inherent method uses
+    /// `String::with_capacity(n)` for a single right-sized allocation and
+    /// writes bytes directly via the inner `Vec<u8>`, skipping the format
+    /// machinery entirely.  Shadowing the `ToString` auto-impl is valid in
+    /// Rust: inherent methods are preferred in method resolution.
+    #[inline]
+    pub fn to_string(&self) -> alloc::string::String {
+        let n = self.digits.len();
+        let mut s = alloc::string::String::with_capacity(n);
+        // SAFETY: we write exactly `n` valid ASCII bytes and then set_len(n).
+        // `to_byte()` returns one of b'+', b'0', b'-' — all valid UTF-8.
+        let buf = unsafe { s.as_mut_vec() };
+        unsafe {
+            let ptr = buf.as_mut_ptr();
+            for (i, d) in self.digits.iter().enumerate() {
+                ptr.add(i).write(d.to_byte());
+            }
+            buf.set_len(n);
+        }
+        s
+    }
 }
 
 #[cfg(feature = "ternary-string")]
@@ -1319,7 +1347,6 @@ pub mod terscii;
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_ternary() {
-    use alloc::string::ToString;
     use crate::*;
 
     let repr5 = Ternary::new(vec![Pos, Neg, Neg]);
@@ -1377,7 +1404,6 @@ fn test_ternary() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_each() {
-    use alloc::string::ToString;
     use crate::*;
     let ternary = Ternary::parse("+0-");
     assert_eq!(ternary.each(Digit::possibly).to_string(), "++-");
@@ -1387,7 +1413,6 @@ fn test_each() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_operations() {
-    use alloc::string::ToString;
     fn test_ternary_eq(a: Ternary, b: &str) {
         let repr = Ternary::parse(b);
         assert_eq!(a.to_string(), repr.to_string());
@@ -1508,7 +1533,6 @@ fn test_iterators() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_shu_up_down() {
-    use alloc::string::ToString;
     use crate::ter;
 
     // SHU↑: each trit cycles -→0→+→- (Digit::post)
@@ -1530,7 +1554,6 @@ fn test_shu_up_down() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_consensus() {
-    use alloc::string::ToString;
     use crate::ter;
 
     // Positions that agree survive; all others become 0
@@ -1552,7 +1575,6 @@ fn test_consensus() {
 #[cfg(feature = "ternary-string")]
 #[test]
 fn test_accept_anything() {
-    use alloc::string::ToString;
     use crate::ter;
 
     // Non-overlapping fields merge losslessly (vine ANY trick)

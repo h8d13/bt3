@@ -122,23 +122,24 @@ def main():
     b = parse_divan(args.baseline)
     n = parse_divan(args.new)
 
-    # diffs: (fastest_pct, bf, af, bm, am, name)
+    # diffs: (median_pct, bf, af, bm, am, fp, mp, name)
+    # Sort and flag by median — more reproducible than fastest across CI runs.
     diffs = []
     for name in b:
         if name not in n:
             continue
         bf, bm = b[name]
         af, am = n[name]
-        # Use fastest for filtering and sorting; fall back to median if missing.
-        ref_before = bf if bf is not None else bm
-        ref_after  = af if af is not None else am
+        # Use median for filtering and sorting; fall back to fastest if missing.
+        ref_before = bm if bm is not None else bf
+        ref_after  = am if am is not None else af
         if ref_before is None or ref_after is None:
             continue
         if ref_before < args.min_ns and ref_after < args.min_ns:
             continue
         fp = pct_change(bf, af) if bf is not None and af is not None else None
         mp = pct_change(bm, am) if bm is not None and am is not None else None
-        sort_key = fp if fp is not None else mp
+        sort_key = mp if mp is not None else fp
         diffs.append((sort_key, bf, af, bm, am, fp, mp, name))
 
     diffs.sort(reverse=True)
@@ -178,11 +179,11 @@ def main():
         am_s = f"{am:>6.1f}ns" if am is not None else "     n/a"
         print(f"{name:<{col}}  {bf_s}  {af_s}  {fmt_pct(fp)}  {bm_s}  {am_s}  {fmt_pct(mp)}{flag}")
 
-    # Regression exit code uses fastest (most reliable signal).
+    # Regression exit code uses median (more reproducible across CI runs than fastest).
     actionable = sum(
-        1 for _, bf, _, _, _, fp, _, _ in diffs
-        if fp is not None and fp < -args.threshold
-        and bf is not None and bf >= args.fail_min_ns
+        1 for _, _, _, bm, _, _, mp, _ in diffs
+        if mp is not None and mp < -args.threshold
+        and bm is not None and bm >= args.fail_min_ns
     )
     if actionable:
         sys.exit(1)
