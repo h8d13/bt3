@@ -1,13 +1,10 @@
 [![Rust](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml/badge.svg)](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml)
 
-# BT3 — Balanced Ternary
+# BT3 BrainTruck3
 
-**BT3** is a Rust library for manipulating
-**[balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary)**
-numbers, a numeral system with digits `-1`, `0`, and `+1`.
+**BT3** is a Rust library for manipulating **[balanced ternary](https://en.wikipedia.org/wiki/Balanced_ternary)** a numeral system with digits `-1`, `0`, and `+1`.
 
-This system is particularly useful in specialized computing applications such as reversible computing, digital signal
-processing, and three-valued logic modeling. 
+This system is particularly useful in specialized computing applications such as reversible computing, digital signal processing, and three-valued logic modeling. 
 
 This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/balanced-ternary) with additional fixed-width types, unsigned ternary types following [Jones's design](https://homepage.divms.uiowa.edu/~jones/ternary/), TERSCII encoding, and significant performance improvements throughout.
 
