@@ -431,40 +431,39 @@ impl Ternary {
         let negative = dec < 0;
         let mut x = dec.unsigned_abs();
 
-        // Pre-allocate: ceil(40/3)*3 = 42 covers any i64 (max 40 trits).
-        let mut digits = Vec::with_capacity(42);
-
-        // 5-trit-at-a-time fast path: each iteration processes x % 243 + carry_in,
-        // producing 5 balanced trits from the precomputed LUT. Cuts loop
-        // iterations by ~5× vs the single-trit `% 3` loop (~8 iters for i64::MAX).
+        // Write quintets into a stack buffer MSB-first (from the end, working
+        // backwards), avoiding a post-loop reverse() and drain()-based trim.
+        // 45 = 9 groups × 5 trits; i64::MAX needs at most 8 groups (40 trits).
+        let mut scratch = [Digit::Zero; 45];
+        let mut end = 45usize;
         let mut carry: u64 = 0;
         while x > 0 || carry > 0 {
             let v = (x % 243 + carry) as u8;
             x /= 243;
             let (new_carry, quintet) = FROM_DEC_TRIT5_LUT[v as usize];
             carry = new_carry as u64;
-            digits.extend_from_slice(&quintet);
+            // quintet is LSB-first; write reversed into scratch for MSB-first.
+            end -= 5;
+            scratch[end]     = quintet[4];
+            scratch[end + 1] = quintet[3];
+            scratch[end + 2] = quintet[2];
+            scratch[end + 3] = quintet[1];
+            scratch[end + 4] = quintet[0];
         }
 
-        // Digits were built LSB-first; reverse to MSB-first.
-        digits.reverse();
+        // Trim leading zeros introduced by fixed 5-digit groups.
+        let start = scratch[end..45].iter().position(|d| *d != Digit::Zero)
+            .map(|p| end + p)
+            .unwrap_or(44);
 
         // For negative inputs, negate in-place.
         if negative {
-            for d in digits.iter_mut() {
+            for d in scratch[start..45].iter_mut() {
                 *d = -*d;
             }
         }
 
-        // Trim leading zeros introduced by fixed 5-digit groups.
-        let first_nz = digits.iter().position(|d| *d != Digit::Zero);
-        match first_nz {
-            None => { digits.truncate(0); digits.push(Zero); }
-            Some(0) => {}
-            Some(pos) => { digits.drain(0..pos); }
-        }
-
-        Ternary::new(digits)
+        Ternary::new(scratch[start..45].to_vec())
     }
 
     /// Converts the balanced ternary number to its unbalanced representation as a string.
