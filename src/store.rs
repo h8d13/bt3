@@ -745,6 +745,25 @@ const fn il40_accept_anything(a: u128, b: u128) -> u128 {
     (new_h << 1) | new_l
 }
 
+// ILTER40_REMAP = MASK_L40 + 1: encodes biased +1.
+// Adding two balanced-biased values yields their sum - 1 (bias doubles).
+// The second uter_add_il40 call corrects by adding +1 (same logic as ILBCT32_REMAP).
+const ILTER40_REMAP: u128 = MASK_L40 + 1;
+
+/// Jones biased-uter addition for 40 IL trits stored in u128.
+///
+/// Same algorithm as `uter_add_u128` but native u128 — no u256 needed.
+/// Intermediate value `d` reaches at most ~81 bits, well within u128.
+#[inline(always)]
+fn uter_add_il40(a: u128, b: u128, mask_l: u128) -> u128 {
+    let c = a.wrapping_add(mask_l);
+    let d = b.wrapping_add(c);
+    let e = (b ^ c) ^ d;
+    let e = !e & (mask_l << 2);
+    let e = e >> 2;
+    (d.wrapping_sub(e)) & (mask_l | (mask_l << 1))
+}
+
 /// A struct to store 40 ternary digits (~63.398 bits) value into one `i64`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 #[repr(transparent)]
@@ -1104,11 +1123,12 @@ fn round_trip() {
 /// | Operation            | `Ter40` (i64 storage) | `IlTer40` (IL u128 storage) |
 /// |----------------------|-----------------------|-----------------------------|
 /// | Logical AND/OR/XOR   | ~15 ns (CHUNK5+Estrin)| ~0.5 ns (pure bitwise)      |
-/// | Arithmetic +/−/×/÷   | ~0.4 ns (direct i64)  | ~15 ns (decode+op+encode)   |
+/// | Arithmetic +/−       | ~0.4 ns (direct i64)  | ~2 ns (Jones biased-uter)   |
+/// | Arithmetic ×/÷       | ~0.4 ns (direct i64)  | ~15 ns (decode+op+encode)   |
 /// | Construction         | O(1)                  | O(1) encode                 |
 ///
 /// Choose `IlTer40` when trit-logical operations dominate; choose `Ter40` when
-/// arithmetic dominates.
+/// arithmetic dominates.  Add/subtract on `IlTer40` is competitive at ~2 ns.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
 pub struct IlTer40(u128);
 
@@ -1181,11 +1201,21 @@ impl BitXor for IlTer40 {
 
 impl Add for IlTer40 {
     type Output = Self;
-    #[inline] fn add(self, o: Self) -> Self { Self::from_dec(self.to_dec() + o.to_dec()) }
+    #[inline]
+    fn add(self, o: Self) -> Self {
+        // Jones biased-uter trick: two uter_add_il40 calls, same pattern as IlBctTer32::add.
+        let s = uter_add_il40(self.0, o.0, MASK_L40);
+        Self(uter_add_il40(s, ILTER40_REMAP, MASK_L40))
+    }
 }
 impl Sub for IlTer40 {
     type Output = Self;
-    #[inline] fn sub(self, o: Self) -> Self { Self::from_dec(self.to_dec() - o.to_dec()) }
+    #[inline]
+    fn sub(self, o: Self) -> Self {
+        let neg_o = il40_neg(o.0);
+        let s = uter_add_il40(self.0, neg_o, MASK_L40);
+        Self(uter_add_il40(s, ILTER40_REMAP, MASK_L40))
+    }
 }
 impl Mul for IlTer40 {
     type Output = Self;

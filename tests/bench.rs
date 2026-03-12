@@ -772,10 +772,10 @@ fn bench_libtern() {
     bench("Ter40      + (direct i64, O(1))", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_ter) + std::hint::black_box(b_ter));
     });
-    bench("BctTer32   + (decode→i64→encode, O(32))", ITERS, || {
+    bench("BctTer32   + (i64 add + decompose)", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_bct) + std::hint::black_box(b_bct));
     });
-    bench("IlBctTer32 + (decode→i64→encode, O(32))", ITERS, || {
+    bench("IlBctTer32 + (Jones biased-uter O(1), 32-trit)", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_il) + std::hint::black_box(b_il));
     });
     bench("UTer9      + (Jones uter_add O(1), 9-trit)", ITERS, || {
@@ -818,7 +818,7 @@ fn bench_ilter40() {
     println!("\n============================================================");
     println!("  IlTer40 vs Ter40 vs BctTer32 — storage trade-off");
     println!("============================================================");
-    println!("  IlTer40 = IL u128 storage: O(1) logical, ~15 ns arithmetic");
+    println!("  IlTer40 = IL u128 storage: O(1) logical, ~2 ns add/sub (Jones biased-uter)");
     println!("  Ter40   = i64    storage: O(1) arithmetic, ~15 ns logical");
     println!("  BctTer32= split BCT u32s: O(1) both (32-trit range only)");
 
@@ -879,13 +879,13 @@ fn bench_ilter40() {
     });
 
     println!("\n--- Arithmetic: add ---");
-    bench("IlTer40  + (decode→i64→encode, ~15 ns)", ITERS, || {
+    bench("IlTer40  + (Jones biased-uter, O(1))", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_il40) + std::hint::black_box(b_il40));
     });
     bench("Ter40    + (direct i64, O(1))", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_t40) + std::hint::black_box(b_t40));
     });
-    bench("BctTer32 + (decode→i64→encode)", ITERS, || {
+    bench("BctTer32 + (via IlBctTer32 O(1) PDEP/PEXT)", ITERS, || {
         std::hint::black_box(std::hint::black_box(a_bct) + std::hint::black_box(b_bct));
     });
 

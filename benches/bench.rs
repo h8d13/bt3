@@ -462,6 +462,13 @@ mod fixed_point {
     }
 
     #[divan::bench]
+    fn ilter40_sub(b: divan::Bencher) {
+        let a = IlTer40::from_dec(12_345_678);
+        let x = IlTer40::from_dec(-9_876_543);
+        b.bench(|| divan::black_box(a) - divan::black_box(x))
+    }
+
+    #[divan::bench]
     fn ilter40_neg(b: divan::Bencher) {
         let a = IlTer40::from_dec(12_345_678);
         b.bench(|| -divan::black_box(a))
