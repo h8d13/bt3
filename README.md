@@ -113,15 +113,13 @@ The library supports numerous three-valued logic operations, each of them having
   A logic framework that avoids the principle of explosion, allowing systems to work with contradictory information.
 - **Post logic**
   A logical system that extends classical logic with additional operators to handle uncertainty in a structured way.
-- **Consensus** — `a · (a == b)`: keeps the trit value where both operands agree, `Zero` elsewhere.
+- **Consensus** keeps the trit value where both operands agree, `Zero` elsewhere.
   Useful for extracting shared information from two ternary words without any branching.
-- **Accept-anything** — `sign(a + b)`: the non-zero trit wins; two conflicting non-zero trits resolve to `Zero`.
+- **Accept-anything** the non-zero trit wins; two conflicting non-zero trits resolve to `Zero`.
   Lets two ternary words with non-overlapping non-zero fields be merged losslessly.
-- **Decoders** — `is_neg`, `is_zero`, `is_pos`: return `Pos` when the trit matches the named value, `Neg` otherwise.
-  Jones NTI / K / PTI indicator functions.
-- **Clamps** — `clamp_down` (min with Zero), `clamp_up` (max with Zero): suppress one polarity.
-  Implemented via arithmetic right shift — branchless and SIMD-vectorizable.
-- **eq_digit** — returns `Pos` if both trits are equal, `Neg` otherwise: per-trit equality test.
+- **Decoders** `is_neg`, `is_zero`, `is_pos`: return `Pos` when the trit matches the named value, `Neg` otherwise. Jones NTI / K / PTI indicator functions.
+- **Clamps** — `clamp_down` (min with Zero), `clamp_up` (max with Zero): suppress one polarity. Implemented via arithmetic right shift — branchless and SIMD-vectorizable.
+- **Equality** returns `Pos` if both trits are equal, `Neg` otherwise: per-trit equality test.
 
 ## License
 
