@@ -13,16 +13,14 @@ repository = "https://github.com/h8d13/bt3"
 default = ["tryte", "ternary-store", "terscii", "getrandom"]
 ternary-store = ["ternary-string"]
 tryte = ["ternary-string"]
-ternary-string = []
 terscii = ["ternary-string", "tryte"]
-# Linux-only: getrandom(2) syscall for no_std entropy (x86_64 / aarch64)
+ternary-string = []
 getrandom = []
 
 [[test]]
 name = "hello"
 path = "tests/examples/hello.rs"
 harness = false
-
 
 [profile.release]
 lto = false
