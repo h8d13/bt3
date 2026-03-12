@@ -1,5 +1,5 @@
-# Align all function entry points AND all basic blocks (loops) to 64-byte
-# cache line boundaries. Prevents layout shifts in .text from causing
-# benchmark noise when any function changes size.
+# Align all function entry points to a 64-byte cache line boundary.
+# Prevents layout shifts in .text from causing benchmark noise when
+# any function changes size.
 [build]
-rustflags = ["-C", "llvm-args=-align-all-functions=64 -align-all-blocks=64"]
+rustflags = ["-C", "llvm-args=-align-all-functions=64"]
