@@ -29,10 +29,9 @@ jobs:
           key: bench-baseline-master
           restore-keys: bench-baseline-
 
-      - name: Run benchmarks (single-threaded)
+      - name: Run benchmarks
         run: |
-          cargo bench -- --threads=1 \
-            2>&1 | tee bench-ci-new.txt
+          cargo bench 2>&1 | tee bench-ci-new.txt
 
       - name: Compare against baseline
         shell: bash
