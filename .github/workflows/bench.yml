@@ -40,7 +40,7 @@ jobs:
           set -o pipefail
           if [ -f bench-ci-baseline.txt ]; then
             python3 bench-compare.py bench-ci-baseline.txt bench-ci-new.txt \
-              --threshold 20 --min-ns 3 --top 20 \
+              --threshold 10 --min-ns 5 \
               --fail-on-regression \
               | tee bench-ci-diff.txt
           else

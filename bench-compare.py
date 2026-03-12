@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 """
-Compare two benchmark output files and show improvements/regressions.
+Compare two benchmark output files.
 
 Usage:
-  # Save a baseline:
   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-baseline.txt
-
-  # After changes, compare:
+  # ... make changes ...
   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-new.txt
   python3 bench-compare.py bench-baseline.txt bench-new.txt
 """
@@ -29,31 +27,14 @@ def parse_bench(fname: str) -> dict[str, float]:
 
 def main():
     parser = argparse.ArgumentParser(description="Compare benchmark results")
-    parser.add_argument("baseline", help="Baseline benchmark output file")
-    parser.add_argument("new", help="New benchmark output file")
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=5.0,
-        help="Min %% change to report (default: 5%%)",
-    )
-    parser.add_argument(
-        "--top",
-        type=int,
-        default=20,
-        help="Number of top improvements/regressions to show (default: 20)",
-    )
-    parser.add_argument(
-        "--min-ns",
-        type=float,
-        default=1.0,
-        help="Ignore ops faster than this (ns) to reduce noise (default: 1.0 ns)",
-    )
-    parser.add_argument(
-        "--fail-on-regression",
-        action="store_true",
-        help="Exit with code 1 if any regression exceeds --threshold (for CI use)",
-    )
+    parser.add_argument("baseline", help="Baseline benchmark file")
+    parser.add_argument("new", help="New benchmark file")
+    parser.add_argument("--threshold", type=float, default=5.0,
+                        help="Min %% change to highlight (default: 5%%)")
+    parser.add_argument("--min-ns", type=float, default=1.0,
+                        help="Skip ops faster than this ns (default: 1.0)")
+    parser.add_argument("--fail-on-regression", action="store_true",
+                        help="Exit 1 if any regression exceeds --threshold")
     args = parser.parse_args()
 
     b = parse_bench(args.baseline)
@@ -63,7 +44,6 @@ def main():
     for name in b:
         if name in n:
             before, after = b[name], n[name]
-            # Skip sub-ns ops — too noisy to measure reliably
             if before < args.min_ns and after < args.min_ns:
                 continue
             pct = (before - after) / before * 100
@@ -71,43 +51,30 @@ def main():
 
     diffs.sort(reverse=True)
 
-    common = len(diffs)
-    only_base = set(b) - set(n)
-    only_new = set(n) - set(b)
+    only_base = sorted(set(b) - set(n))
+    only_new  = sorted(set(n) - set(b))
 
-    improved = sum(1 for p, _, _, _ in diffs if p > args.threshold)
-    regressed = sum(1 for p, _, _, _ in diffs if p < -args.threshold)
-    unchanged = common - improved - regressed
+    improved  = sum(1 for p, *_ in diffs if p >  args.threshold)
+    regressed = sum(1 for p, *_ in diffs if p < -args.threshold)
+    unchanged = len(diffs) - improved - regressed
 
-    print(f"Comparing: {args.baseline}  →  {args.new}")
-    print(f"Common ops: {common}  |  improved: {improved}  unchanged: {unchanged}  regressed: {regressed}")
+    print(f"{args.baseline} -> {args.new}")
+    print(f"{len(diffs)} ops: +{improved} improved  -{regressed} regressed  ={unchanged} unchanged")
     if only_base:
-        print(f"  Only in baseline ({len(only_base)}): {', '.join(sorted(only_base)[:5])}{'...' if len(only_base) > 5 else ''}")
+        print(f"removed: {', '.join(only_base)}")
     if only_new:
-        print(f"  Only in new      ({len(only_new)}): {', '.join(sorted(only_new)[:5])}{'...' if len(only_new) > 5 else ''}")
+        print(f"added:   {', '.join(only_new)}")
     print()
 
-    improvements = [(p, b, a, nm) for (p, b, a, nm) in diffs if p > args.threshold]
-    regressions  = [(p, b, a, nm) for (p, b, a, nm) in diffs if p < -args.threshold]
+    col = max((len(name) for _, _, _, name in diffs), default=0)
 
-    if improvements:
-        print(f"TOP {min(args.top, len(improvements))} IMPROVEMENTS:")
-        for pct, before, after, name in improvements[: args.top]:
-            bar = "▓" * int(pct / 5)
-            print(f"  {pct:+6.1f}%  {before:6.1f} → {after:6.1f} ns  {bar}  {name}")
-        print()
+    print(f"{'name':<{col}}  {'before':>8}  {'after':>8}  {'change':>8}")
+    print("-" * (col + 30))
+    for pct, before, after, name in diffs:
+        flag = "  +" if pct > args.threshold else ("  -" if pct < -args.threshold else "   ")
+        print(f"{name:<{col}}  {before:>7.1f}ns  {after:>7.1f}ns  {pct:>+7.1f}%{flag}")
 
-    if regressions:
-        print(f"TOP {min(args.top, len(regressions))} REGRESSIONS:")
-        for pct, before, after, name in sorted(regressions)[-args.top :]:
-            bar = "░" * int(-pct / 5)
-            print(f"  {pct:+6.1f}%  {before:6.1f} → {after:6.1f} ns  {bar}  {name}")
-        print()
-
-    if not improvements and not regressions:
-        print("No significant changes detected.")
-
-    if args.fail_on_regression and regressions:
+    if args.fail_on_regression and regressed:
         sys.exit(1)
 
 
