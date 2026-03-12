@@ -3,7 +3,7 @@ use crate::{
     Digit::{Neg, Pos, Zero},
     Ternary,
 };
-use alloc::string::{String, ToString};
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::{Display, Formatter};
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg as StdNeg, Not, Shl, Shr, Sub};
@@ -416,6 +416,30 @@ impl<const SIZE: usize> Tryte<SIZE> {
         let result = self.to_i64() * rhs.to_i64();
         let max = Self::max_i64();
         if result > max { Self::MAX } else if result < -max { Self::MIN } else { Self::from_i64(result) }
+    }
+
+    /// Returns the trit string representation as a newly allocated `String`.
+    ///
+    /// # Optimization: pre-allocated buffer, direct unsafe write
+    ///
+    /// `Display` already builds on a stack `[u8; SIZE]` buffer, but the
+    /// trait `to_string()` route wraps it in `fmt::format` which starts with
+    /// a zero-capacity `String` and reallocates on `write_str`.  This inherent
+    /// method pre-allocates `SIZE` bytes and writes directly — one allocation,
+    /// no realloc.
+    #[inline]
+    pub fn to_string(&self) -> alloc::string::String {
+        let mut s = alloc::string::String::with_capacity(SIZE);
+        // SAFETY: '+', '0', '-' are all ASCII (valid single-byte UTF-8).
+        unsafe {
+            let buf = s.as_mut_vec();
+            let ptr = buf.as_mut_ptr();
+            for (i, d) in self.raw.iter().enumerate() {
+                ptr.add(i).write(d.to_byte());
+            }
+            buf.set_len(SIZE);
+        }
+        s
     }
 
 }

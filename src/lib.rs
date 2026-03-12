@@ -501,9 +501,21 @@ impl Ternary {
         }
 
         // Trim leading zeros introduced by fixed 5-digit groups.
-        let start = scratch[end..45].iter().position(|d| *d != Digit::Zero)
-            .map(|p| end + p)
-            .unwrap_or(44);
+        // # Optimization: cast to i8 for SIMD-friendly scan
+        //
+        // Digit is #[repr(i8)] with Zero=0; the cast is bit-identical and
+        // lets LLVM auto-vectorize the scan instead of iterating Digit enums
+        // one-by-one.
+        let start = {
+            // SAFETY: Digit is #[repr(i8)]; Zero=0 as i8; scratch is valid for 45 elements.
+            let raw: &[i8] = unsafe {
+                core::slice::from_raw_parts(scratch.as_ptr() as *const i8, 45)
+            };
+            let slice = &raw[end..];
+            let mut p = 0usize;
+            while p < slice.len() && slice[p] == 0 { p += 1; }
+            if p < slice.len() { end + p } else { 44 }
+        };
 
         Ternary::new(scratch[start..45].to_vec())
     }
@@ -586,19 +598,27 @@ impl Ternary {
     /// # Notes
     ///
     /// This method does not mutate the original `Ternary` object but returns a new representation.
-    /// # Optimization: digit-scan instead of `to_dec()`
+    /// # Optimization: i8-cast scan for SIMD auto-vectorization
     ///
     /// The previous implementation called `self.to_dec() == 0` to detect the
     /// all-zeros case. That performed O(n) multiplications and power-of-3
     /// accumulations just to check a condition that is trivially visible from
-    /// the digit array itself. We now use `Iterator::position` to find the
-    /// first non-zero digit and slice from there — pure O(n) comparison with
-    /// no arithmetic.
+    /// the digit array itself.
+    ///
+    /// Iterating over `Digit` enum values prevents LLVM from generating SIMD
+    /// instructions. Casting to `i8` (valid because `Digit` is `#[repr(i8)]`
+    /// with `Zero=0`) exposes a plain integer scan that LLVM can auto-vectorize
+    /// (pcmpeqb/pmovmskb on x86-64).
     pub fn trim(&self) -> Self {
-        match self.digits.iter().position(|d| *d != Zero) {
-            None => Ternary::new(vec![Zero]),
-            Some(pos) => Ternary::new(self.digits[pos..].to_vec()),
-        }
+        let n = self.digits.len();
+        // SAFETY: Digit is #[repr(i8)]; Zero=0 as i8. The cast is bit-identical.
+        let raw: &[i8] = unsafe {
+            core::slice::from_raw_parts(self.digits.as_ptr() as *const i8, n)
+        };
+        let mut pos = 0usize;
+        while pos < n && raw[pos] == 0 { pos += 1; }
+        let start = if pos < n { pos } else { n - 1 };
+        Ternary::new(self.digits[start..].to_vec())
     }
 
     /// Adjusts the representation of the `Ternary` number to have a fixed number of digits.

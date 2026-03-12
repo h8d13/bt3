@@ -2753,22 +2753,6 @@ pub struct BTer9(u32);
 /// Bias for 9-trit balanced ternary: (3^9 − 1)/2 = 9841.
 const BTER9_BIAS: u32 = 9841;
 
-/// Precomputed 6-bit IL code for each 3-trit unsigned value 0..26.
-/// CHUNK3[k] = (trit0_code) | (trit1_code << 2) | (trit2_code << 4)
-/// where trit_i_code ∈ {0,1,2} (0→00, 1→01, 2→10 in BCT).
-/// Used by BTer9::from_dec and BTer27::from_dec to process 3 trits per divmod.
-const CHUNK3: [u8; 27] = {
-    let mut t = [0u8; 27];
-    let mut k = 0usize;
-    while k < 27 {
-        let c0 = (k % 3) as u8;
-        let c1 = ((k / 3) % 3) as u8;
-        let c2 = (k / 9) as u8;
-        t[k] = c0 | (c1 << 2) | (c2 << 4);
-        k += 1;
-    }
-    t
-};
 
 impl BTer9 {
     pub const ZERO: Self = Self(MASK9_L);  // all 01 = 0
