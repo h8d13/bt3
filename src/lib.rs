@@ -1220,20 +1220,25 @@ impl Ord for Ternary {
         // integer loop that LLVM vectorizes with PCMPGTB — much faster than
         // letting it go through Digit's derived Ord (which generates match arms).
         if a.len() == b.len() {
-            // Two-pass strategy: a vectorizable fold detects any difference first;
-            // a scalar scan finds the exact position only when needed.
-            // Digit is repr(i8) with values {-1, 0, 1}; signed byte ordering is correct.
-            // SAFETY: Digit is #[repr(i8)]; casting &[Digit] to &[i8] is sound.
+            // SAFETY: Digit is #[repr(i8)] with Neg=-1, Zero=0, Pos=1;
+            // signed byte ordering matches ternary ordering.
             let a_i8 = unsafe { core::slice::from_raw_parts(a.as_ptr() as *const i8, a.len()) };
             let b_i8 = unsafe { core::slice::from_raw_parts(b.as_ptr() as *const i8, b.len()) };
-            // OR-reduce of XOR pairs: LLVM vectorizes this with PXOR + POR.
-            // Result is 0 iff all bytes are equal.
+            // Optimistic MST check: the most significant trit often differs → O(1) exit.
+            // SAFETY: Ternary always has at least 1 digit.
+            let (a0, b0) = unsafe { (*a_i8.get_unchecked(0), *b_i8.get_unchecked(0)) };
+            if a0 != b0 {
+                return a0.cmp(&b0);
+            }
+            // MSTs match: use a vectorizable OR-fold (PXOR+POR) over the whole slice
+            // to detect any difference without early exit — LLVM emits SIMD here.
+            // Re-checks position 0 (one redundant compare) but the fold is branchless.
             let diff: i8 = a_i8.iter().zip(b_i8.iter()).fold(0i8, |acc, (x, y)| acc | (x ^ y));
             if diff == 0 {
                 return Ordering::Equal;
             }
-            // Rare case: find the first differing position and compare.
-            for i in 0..a_i8.len() {
+            // Difference found somewhere after position 0: scalar scan for exact position.
+            for i in 1..a_i8.len() {
                 let (av, bv) = unsafe { (*a_i8.get_unchecked(i), *b_i8.get_unchecked(i)) };
                 if av != bv {
                     return av.cmp(&bv);
