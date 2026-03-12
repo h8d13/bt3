@@ -153,16 +153,37 @@ impl<const SIZE: usize> Tryte<SIZE> {
     /// A `Tryte` representing the equivalent ternary number.
     pub const fn from_i64(v: i64) -> Self {
         let mut raw = [Digit::Zero; SIZE];
-        let mut n = v;
+        if v == 0 {
+            return Self::new(raw);
+        }
+        // Work unsigned: avoids ((n%3)+3)%3 (two signed mod-3 per iteration).
+        // Hoist the sign branch outside the loop so each hot path is branch-free.
+        // SAFETY: trit ∈ {-1, 0, 1} in both branches.
+        let negative = v < 0;
+        let mut x = v.unsigned_abs();
         let mut i = SIZE;
-        while i > 0 {
-            i -= 1;
-            // Normalize remainder to {0, 1, 2} then map to balanced {0, 1, -1}
-            let rem = ((n % 3) + 3) % 3;
-            let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
-            // SAFETY: trit ∈ {-1, 0, 1}
-            raw[i] = unsafe { core::mem::transmute::<i8, Digit>(trit) };
-            n = (n - trit as i64) / 3;
+        if !negative {
+            while i > 0 {
+                i -= 1;
+                let rem = (x % 3) as u8; // rem ∈ {0, 1, 2}
+                // Map: 0→Zero(0), 1→Pos(1), 2→Neg(-1)
+                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                    if rem == 2 { -1i8 } else { rem as i8 }
+                )};
+                // Advance: x = (x - trit) / 3
+                //   rem=0: x/3  rem=1: (x-1)/3  rem=2: (x-2)/3+1 = (x+1)/3
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+            }
+        } else {
+            while i > 0 {
+                i -= 1;
+                let rem = (x % 3) as u8;
+                // Negate: 0→Zero(0), 1→Neg(-1), 2→Pos(+1)
+                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                    if rem == 2 { 1i8 } else { -(rem as i8) }
+                )};
+                x = (x - rem as u64) / 3 + (rem == 2) as u64;
+            }
         }
         Self::new(raw)
     }

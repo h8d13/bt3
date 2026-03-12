@@ -201,7 +201,21 @@ pub fn ter(from: &str) -> Ternary {
 /// assert_eq!(tryte_value.to_string(), "00+0+0");
 /// ```
 pub fn tryte(from: &str) -> Tryte {
-    Tryte::from_ternary(&ter(from))
+    // Direct parse: branchless byte→Digit, right-aligned into [Digit; 6].
+    // Avoids Ternary::parse() heap allocation + from_ternary() copy.
+    // Same branchless formula as Ternary::parse: (b=='+') as i8 - (b=='-') as i8.
+    let bytes = from.as_bytes();
+    let n = bytes.len().min(6);
+    let mut raw = [Digit::Zero; 6];
+    let offset = 6 - n;
+    // SAFETY: (b==b'+') as i8 - (b==b'-') as i8 ∈ {-1, 0, 1} = valid Digit repr.
+    unsafe {
+        let dst = raw.as_mut_ptr() as *mut i8;
+        for (j, &b) in bytes[..n].iter().enumerate() {
+            dst.add(offset + j).write((b == b'+') as i8 - (b == b'-') as i8);
+        }
+    }
+    Tryte::new(raw)
 }
 
 /// Creates a `DataTernary` object from a string representation of a balanced ternary number.
