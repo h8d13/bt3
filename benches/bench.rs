@@ -496,6 +496,61 @@ mod fixed_point {
         b.bench(|| divan::black_box(a) + divan::black_box(x))
     }
 
+    // --- trit_neg / trit_equ / uter_add_carry ---
+    #[divan::bench]
+    fn uter9_trit_neg(b: divan::Bencher) {
+        let a = UTer9::from_dec(12345);
+        b.bench(|| !divan::black_box(a))
+    }
+
+    #[divan::bench]
+    fn uter27_trit_neg(b: divan::Bencher) {
+        let a = UTer27::from_dec(1_234_567_890);
+        b.bench(|| !divan::black_box(a))
+    }
+
+    #[divan::bench]
+    fn uter9_trit_equ(b: divan::Bencher) {
+        let a = UTer9::from_dec(12345);
+        let x = UTer9::from_dec(9876);
+        b.bench(|| divan::black_box(a).trit_equ(divan::black_box(x)))
+    }
+
+    #[divan::bench]
+    fn uter27_trit_equ(b: divan::Bencher) {
+        let a = UTer27::from_dec(1_234_567_890);
+        let x = UTer27::from_dec(987_654_321);
+        b.bench(|| divan::black_box(a).trit_equ(divan::black_box(x)))
+    }
+
+    #[divan::bench]
+    fn bter9_il_equ(b: divan::Bencher) {
+        let a = BTer9::from_dec(1234);
+        let x = BTer9::from_dec(-987);
+        b.bench(|| divan::black_box(a).il_equ(divan::black_box(x)))
+    }
+
+    #[divan::bench]
+    fn bter27_il_equ(b: divan::Bencher) {
+        let a = BTer27::from_dec(1_234_567_890);
+        let x = BTer27::from_dec(-987_654_321);
+        b.bench(|| divan::black_box(a).il_equ(divan::black_box(x)))
+    }
+
+    #[divan::bench]
+    fn uter9_add_carry(b: divan::Bencher) {
+        let a = UTer9::from_dec(12345);
+        let x = UTer9::from_dec(7890);
+        b.bench(|| divan::black_box(a).uter_add_carry(divan::black_box(x), UTer9::ZERO))
+    }
+
+    #[divan::bench]
+    fn uter27_add_carry(b: divan::Bencher) {
+        let a = UTer27::from_dec(1_234_567_890);
+        let x = UTer27::from_dec(987_654_321);
+        b.bench(|| divan::black_box(a).uter_add_carry(divan::black_box(x), UTer27::ZERO))
+    }
+
     // --- BTer27 / UTer27 ---
     #[divan::bench]
     fn bter27_add(b: divan::Bencher) {

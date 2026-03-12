@@ -2474,6 +2474,38 @@ const fn il_xor_u64(a: u64, b: u64, mask_l: u64) -> u64 {
     (new_h << 1) | new_l
 }
 
+/// Łukasiewicz biconditional (a ↔ b) for BCT u32: +1 if equal, 0 if one is Zero, -1 if poles.
+/// BCT encoding: 00 = −1, 01 = 0, 10 = +1.
+///
+/// Truth table (matches Jones `ter9_equ`):
+///   equ(+1,+1)=+1  equ(0,0)=+1  equ(−1,−1)=+1
+///   equ(−1,0)=0    equ(0,+1)=0
+///   equ(−1,+1)=−1  equ(+1,−1)=−1
+#[inline(always)]
+const fn il_trit_equ_u32(a: u32, b: u32, mask_l: u32) -> u32 {
+    let ha = (a >> 1) & mask_l; let la = a & mask_l;
+    let hb = (b >> 1) & mask_l; let lb = b & mask_l;
+    let na = mask_l & !ha & !la; // a trit = −1 (BCT 00)
+    let nb = mask_l & !hb & !lb; // b trit = −1 (BCT 00)
+    let new_h = (na & nb) | (la & lb) | (ha & hb); // agree on any value → +1
+    let is_neg = (na & hb) | (ha & nb);             // −1 vs +1 → result −1
+    let new_l = mask_l & !new_h & !is_neg;          // neither → 0
+    (new_h << 1) | new_l
+}
+
+/// Same for u64.
+#[inline(always)]
+const fn il_trit_equ_u64(a: u64, b: u64, mask_l: u64) -> u64 {
+    let ha = (a >> 1) & mask_l; let la = a & mask_l;
+    let hb = (b >> 1) & mask_l; let lb = b & mask_l;
+    let na = mask_l & !ha & !la;
+    let nb = mask_l & !hb & !lb;
+    let new_h = (na & nb) | (la & lb) | (ha & hb);
+    let is_neg = (na & hb) | (ha & nb);
+    let new_l = mask_l & !new_h & !is_neg;
+    (new_h << 1) | new_l
+}
+
 // ---- Parameterized Jones uter_add (shared by UTer9/UTer27/BTer9/BTer27) ----
 //
 // bter_add(a, b) = uter_add(uter_add(a.raw, b.raw), REMAP)
@@ -2625,16 +2657,44 @@ impl UTer9 {
         self.uter_add(comp3)
     }
 
-    // Trit-wise logical ops (min/max/xor)
+    // Trit-wise logical ops (min/max/xor/neg/equ)
     #[inline(always)] pub const fn trit_and(self, o: Self) -> Self { Self(il_and_u32(self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn trit_or (self, o: Self) -> Self { Self(il_or_u32 (self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn trit_xor(self, o: Self) -> Self { Self(il_xor_u32(self.0, o.0, MASK9_L)) }
+    /// Jones `TER9_NEG`: per-trit negation (0↔2, 1↔1). One subtraction.
+    #[inline(always)] pub const fn trit_neg(self)          -> Self { Self(MASK9_H - self.0) }
+    /// Jones `ter9_equ`: Łukasiewicz biconditional — +1 if equal, 0 if one is Zero, −1 if opposite.
+    #[inline(always)] pub const fn trit_equ(self, o: Self) -> Self { Self(il_trit_equ_u32(self.0, o.0, MASK9_L)) }
+
+    /// Jones `uter9_addc`: add with carry-out for multi-word chaining.
+    ///
+    /// `cin` must be trit 0 (BCT `0x00`) or trit 1 (BCT `0x01`); using binary `+` for
+    /// carry-in is safe at those values (Jones' trick).  The carry-out is always 0 or 1.
+    ///
+    /// ```
+    /// use balanced_ternary::UTer9;
+    /// let (sum, carry) = UTer9::MAX.uter_add_carry(UTer9::from_dec(1), UTer9::ZERO);
+    /// assert_eq!(carry.to_dec(), 1); // overflowed
+    /// ```
+    #[inline]
+    pub const fn uter_add_carry(self, other: Self, cin: Self) -> (Self, Self) {
+        let a = self.0;
+        let b = other.0.wrapping_add(cin.0); // Jones: binary + safe for cin ∈ {0,1}
+        let c = a.wrapping_add(MASK9_L);
+        let d = b.wrapping_add(c);
+        let e = (b ^ c) ^ d;
+        let e = !e & (MASK9_L << 2);
+        let e = e >> 2;
+        let raw = d.wrapping_sub(e);
+        (Self(raw & MASK9), Self((raw >> 18) & 3)) // carry in bits 18-19
+    }
 }
 
 impl Add for UTer9 { type Output = Self; fn add(self, r: Self) -> Self { self.uter_add(r) } }
 impl Sub for UTer9 { type Output = Self; fn sub(self, r: Self) -> Self { self.uter_sub(r) } }
 impl Mul for UTer9 { type Output = Self; fn mul(self, r: Self) -> Self { Self::from_dec(self.to_dec() * r.to_dec()) } }
 impl Div for UTer9 { type Output = Self; fn div(self, r: Self) -> Self { Self::from_dec(self.to_dec() / r.to_dec()) } }
+impl Not    for UTer9 { type Output = Self; fn not(self)            -> Self { self.trit_neg() } }
 impl BitAnd for UTer9 { type Output = Self; fn bitand(self, r: Self) -> Self { self.trit_and(r) } }
 impl BitOr  for UTer9 { type Output = Self; fn bitor (self, r: Self) -> Self { self.trit_or(r)  } }
 impl BitXor for UTer9 { type Output = Self; fn bitxor(self, r: Self) -> Self { self.trit_xor(r) } }
@@ -2752,12 +2812,39 @@ impl UTer27 {
     #[inline(always)] pub const fn trit_and(self, o: Self) -> Self { Self(il_and_u64(self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn trit_or (self, o: Self) -> Self { Self(il_or_u64 (self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn trit_xor(self, o: Self) -> Self { Self(il_xor_u64(self.0, o.0, MASK27_L)) }
+    /// Jones `TER27_NEG`: per-trit negation (0↔2, 1↔1). One subtraction.
+    #[inline(always)] pub const fn trit_neg(self)          -> Self { Self(MASK27_H - self.0) }
+    /// Jones `ter27_equ`: Łukasiewicz biconditional — +1 if equal, 0 if one is Zero, −1 if opposite.
+    #[inline(always)] pub const fn trit_equ(self, o: Self) -> Self { Self(il_trit_equ_u64(self.0, o.0, MASK27_L)) }
+
+    /// Jones `uter27_addc`: add with carry-out for multi-word chaining.
+    ///
+    /// `cin` must be trit 0 (BCT `0x00`) or trit 1 (BCT `0x01`).  Carry-out is always 0 or 1.
+    ///
+    /// ```
+    /// use balanced_ternary::UTer27;
+    /// let (sum, carry) = UTer27::MAX.uter_add_carry(UTer27::from_dec(1), UTer27::ZERO);
+    /// assert_eq!(carry.to_dec(), 1);
+    /// ```
+    #[inline]
+    pub const fn uter_add_carry(self, other: Self, cin: Self) -> (Self, Self) {
+        let a = self.0;
+        let b = other.0.wrapping_add(cin.0);
+        let c = a.wrapping_add(MASK27_L);
+        let d = b.wrapping_add(c);
+        let e = (b ^ c) ^ d;
+        let e = !e & (MASK27_L << 2);
+        let e = e >> 2;
+        let raw = d.wrapping_sub(e);
+        (Self(raw & MASK27), Self((raw >> 54) & 3)) // carry in bits 54-55
+    }
 }
 
 impl Add for UTer27 { type Output = Self; fn add(self, r: Self) -> Self { self.uter_add(r) } }
 impl Sub for UTer27 { type Output = Self; fn sub(self, r: Self) -> Self { self.uter_sub(r) } }
 impl Mul for UTer27 { type Output = Self; fn mul(self, r: Self) -> Self { Self::from_dec(self.to_dec() * r.to_dec()) } }
 impl Div for UTer27 { type Output = Self; fn div(self, r: Self) -> Self { Self::from_dec(self.to_dec() / r.to_dec()) } }
+impl Not    for UTer27 { type Output = Self; fn not(self)            -> Self { self.trit_neg() } }
 impl BitAnd for UTer27 { type Output = Self; fn bitand(self, r: Self) -> Self { self.trit_and(r) } }
 impl BitOr  for UTer27 { type Output = Self; fn bitor (self, r: Self) -> Self { self.trit_or(r)  } }
 impl BitXor for UTer27 { type Output = Self; fn bitxor(self, r: Self) -> Self { self.trit_xor(r) } }
@@ -2838,6 +2925,8 @@ impl BTer9 {
     #[inline(always)] pub const fn il_and(self, o: Self) -> Self { Self(il_and_u32(self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn il_or (self, o: Self) -> Self { Self(il_or_u32 (self.0, o.0, MASK9_L)) }
     #[inline(always)] pub const fn il_xor(self, o: Self) -> Self { Self(il_xor_u32(self.0, o.0, MASK9_L)) }
+    /// Jones `ter9_equ`: Łukasiewicz biconditional — +1 if equal, 0 if one is Zero, −1 if opposite.
+    #[inline(always)] pub const fn il_equ(self, o: Self) -> Self { Self(il_trit_equ_u32(self.0, o.0, MASK9_L)) }
 
     /// Trit-wise logical left shift, fill with Zero.
     #[inline(always)] pub const fn il_shl(self, n: usize) -> Self {
@@ -2947,6 +3036,8 @@ impl BTer27 {
     #[inline(always)] pub const fn il_and(self, o: Self) -> Self { Self(il_and_u64(self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn il_or (self, o: Self) -> Self { Self(il_or_u64 (self.0, o.0, MASK27_L)) }
     #[inline(always)] pub const fn il_xor(self, o: Self) -> Self { Self(il_xor_u64(self.0, o.0, MASK27_L)) }
+    /// Jones `ter27_equ`: Łukasiewicz biconditional — +1 if equal, 0 if one is Zero, −1 if opposite.
+    #[inline(always)] pub const fn il_equ(self, o: Self) -> Self { Self(il_trit_equ_u64(self.0, o.0, MASK27_L)) }
 
     #[inline(always)] pub const fn il_shl(self, n: usize) -> Self {
         if n >= 27 { return Self::ZERO; }
@@ -3111,6 +3202,122 @@ fn bter9_bter27_match_bct32() {
             assert_eq!((b9a ^ b9b).to_dec() as i64, (ila ^ ilb).to_dec(), "XOR b9 vs il32 a={a} b={b}");
         }
     }
+}
+
+// ---- trit_neg / trit_equ / uter_add_carry -----------------------------------
+
+#[cfg(test)]
+#[test]
+fn uter9_trit_neg() {
+    // trit_neg flips all 9 trits: 0↔2, 1↔1.
+    // Use uniform-trit values so all trits behave identically:
+    //   MAX=19682 = all trits 2;  ZERO=0 = all trits 0;  mid=9841 = all trits 1
+    let mid = UTer9::from_dec(9841); // 9841 = (3^9-1)/2 = all-ones
+    assert_eq!((!UTer9::MAX).to_dec(),  0,    "trit_neg(MAX)=0");
+    assert_eq!((!UTer9::ZERO).to_dec(), 19682, "trit_neg(0)=MAX");
+    assert_eq!((!mid).to_dec(),         9841,  "trit_neg(mid)=mid");
+    // double negation = identity
+    for v in [0u32, 1, 42, 9841, 19682] {
+        let t = UTer9::from_dec(v);
+        assert_eq!((!(!t)).to_dec(), v, "double neg {v}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn uter27_trit_neg() {
+    // 9_841_640_644_854 = (3^27-1)/2, but exact value doesn't matter; double-neg is key
+    assert_eq!((!UTer27::MAX).to_dec(),  0,                    "trit_neg(MAX)=0");
+    assert_eq!((!UTer27::ZERO).to_dec(), UTer27::MAX.to_dec(), "trit_neg(0)=MAX");
+    for v in [0u64, 1, 1_000_000, 7_625_597_484_986] {
+        let t = UTer27::from_dec(v);
+        assert_eq!((!(!t)).to_dec(), v, "double neg {v}");
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn trit_equ_uniform() {
+    // Use uniform-trit UTer9 values: ZERO (all 0), MAX (all 2), mid=9841 (all 1).
+    // equ(a,b) trit-wise: same→+1(2), opposite→−1(0), one-zero→0(1).
+    let zero = UTer9::ZERO;        // all trits = 0
+    let max  = UTer9::MAX;         // all trits = 2
+    let mid  = UTer9::from_dec(9841); // all trits = 1
+    // equal pairs → all trits +1 (= 2) → MAX
+    assert_eq!(max.trit_equ(max).to_dec(),   19682, "equ(MAX,MAX)=MAX");
+    assert_eq!(zero.trit_equ(zero).to_dec(), 19682, "equ(0,0)=MAX");
+    assert_eq!(mid.trit_equ(mid).to_dec(),   19682, "equ(mid,mid)=MAX");
+    // opposite poles → all trits −1 (= 0) → ZERO
+    assert_eq!(max.trit_equ(zero).to_dec(),  0,     "equ(MAX,0)=ZERO");
+    assert_eq!(zero.trit_equ(max).to_dec(),  0,     "equ(0,MAX)=ZERO");
+    // one zero → all trits 0 (= 1) → mid
+    assert_eq!(max.trit_equ(mid).to_dec(),   9841,  "equ(MAX,mid)=mid");
+    assert_eq!(zero.trit_equ(mid).to_dec(),  9841,  "equ(0,mid)=mid");
+    // same check for UTer27
+    let z27 = UTer27::ZERO; let m27 = UTer27::MAX;
+    assert_eq!(m27.trit_equ(m27).to_dec(),  UTer27::MAX.to_dec(), "U27 equ(MAX,MAX)");
+    assert_eq!(z27.trit_equ(z27).to_dec(),  UTer27::MAX.to_dec(), "U27 equ(0,0)");
+    assert_eq!(m27.trit_equ(z27).to_dec(),  0,                    "U27 equ(MAX,0)");
+}
+
+#[cfg(test)]
+#[test]
+fn bter9_bter27_il_equ_uniform() {
+    // BTer9/27 uniform-trit values:
+    //   all_pos = from_dec(+max), all_zero = from_dec(0), all_neg = from_dec(-max)
+    let p9 = BTer9::from_dec(9841);
+    let z9 = BTer9::from_dec(0);
+    let n9 = BTer9::from_dec(-9841);
+    // equal → all +1 → +max
+    assert_eq!(p9.il_equ(p9).to_dec(), 9841,  "equ(+,+)=+max");
+    assert_eq!(z9.il_equ(z9).to_dec(), 9841,  "equ(0,0)=+max");
+    assert_eq!(n9.il_equ(n9).to_dec(), 9841,  "equ(-,-)=+max");
+    // opposite → all -1 → -max
+    assert_eq!(p9.il_equ(n9).to_dec(), -9841, "equ(+,-)=-max");
+    assert_eq!(n9.il_equ(p9).to_dec(), -9841, "equ(-,+)=-max");
+    // one zero → all 0
+    assert_eq!(p9.il_equ(z9).to_dec(), 0,     "equ(+,0)=0");
+    assert_eq!(n9.il_equ(z9).to_dec(), 0,     "equ(-,0)=0");
+    // BTer27 same logic using uniform-trit values
+    const B27_MAX: i64 = 3_812_798_742_493; // (3^27-1)/2 = all trits +1
+    let p27 = BTer27::from_dec(B27_MAX);  // all trits = +1
+    let z27 = BTer27::from_dec(0);        // all trits = 0
+    let n27 = BTer27::from_dec(-B27_MAX); // all trits = -1
+    assert_eq!(p27.il_equ(p27).to_dec(),  B27_MAX,  "B27 equ(+,+)=max");
+    assert_eq!(z27.il_equ(z27).to_dec(),  B27_MAX,  "B27 equ(0,0)=max");
+    assert_eq!(n27.il_equ(n27).to_dec(),  B27_MAX,  "B27 equ(-,-)=max");
+    assert_eq!(p27.il_equ(n27).to_dec(), -B27_MAX,  "B27 equ(+,-)=-max");
+    assert_eq!(p27.il_equ(z27).to_dec(),  0,         "B27 equ(+,0)=0");
+}
+
+#[cfg(test)]
+#[test]
+fn uter9_add_carry_overflow() {
+    // MAX + 1 wraps to 0 with carry=1
+    let (sum, carry) = UTer9::MAX.uter_add_carry(UTer9::from_dec(1), UTer9::ZERO);
+    assert_eq!(sum.to_dec(), 0, "MAX+1 sum");
+    assert_eq!(carry.to_dec(), 1, "MAX+1 carry");
+    // small + small, no overflow
+    let (sum, carry) = UTer9::from_dec(100).uter_add_carry(UTer9::from_dec(200), UTer9::ZERO);
+    assert_eq!(sum.to_dec(), 300);
+    assert_eq!(carry.to_dec(), 0);
+    // chain: carry propagation
+    let (s1, c1) = UTer9::MAX.uter_add_carry(UTer9::MAX, UTer9::ZERO);
+    assert_eq!(s1.to_dec(), UTer9::MAX.to_dec() - 1); // 2*(3^9-1) mod 3^9 = 3^9-2
+    assert_eq!(c1.to_dec(), 1);
+}
+
+#[cfg(test)]
+#[test]
+fn uter27_add_carry_overflow() {
+    let (sum, carry) = UTer27::MAX.uter_add_carry(UTer27::from_dec(1), UTer27::ZERO);
+    assert_eq!(sum.to_dec(), 0);
+    assert_eq!(carry.to_dec(), 1);
+    let (sum, carry) = UTer27::from_dec(1_000_000).uter_add_carry(
+        UTer27::from_dec(2_000_000), UTer27::ZERO,
+    );
+    assert_eq!(sum.to_dec(), 3_000_000);
+    assert_eq!(carry.to_dec(), 0);
 }
 
 // ---- BctTer32 unit tests ----------------------------------------------------
