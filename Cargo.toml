@@ -12,6 +12,7 @@ repository = "https://github.com/h8d13/bt3"
 [features]
 default = ["tryte", "ternary-store", "terscii", "getrandom"]
 ternary-store = ["ternary-string"]
+ternary-matrix = ["ternary-store"]
 tryte = ["ternary-string"]
 terscii = ["ternary-string", "tryte"]
 ternary-string = []

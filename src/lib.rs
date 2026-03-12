@@ -1363,6 +1363,9 @@ mod store;
 pub use crate::store::{BctTer32, IlBctTer32, Ter40, IlTer40, DataTernary, TritsChunk,
                         UTer9, UTer27, BTer9, BTer27};
 
+#[cfg(feature = "ternary-matrix")]
+pub mod matrix;
+
 #[cfg(feature = "tryte")]
 mod tryte;
 

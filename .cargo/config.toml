@@ -12,3 +12,9 @@ rustflags = [
   "-C", "llvm-args=-align-all-functions=64",
   "-C", "llvm-args=-align-all-nofallthru-blocks=64",
 ]
+
+# align-all-* flags cause LLVM's DeleteDeadPHIs pass to overflow the default
+# 8 MiB thread stack when compiling large loop-heavy functions (LLVM bug #21).
+# 16 MiB is enough; this env var is picked up by rustc's codegen threads.
+[env]
+RUST_MIN_STACK = "16777216"

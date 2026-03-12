@@ -1069,3 +1069,81 @@ fn bench_getrandom() {
         std::hint::black_box(rng.rand_uter27());
     });
 }
+
+#[test]
+#[cfg(feature = "ternary-matrix")]
+fn bench_matrix() {
+    use balanced_ternary::matrix::{TernaryMatrix, TernaryVec};
+
+    println!("\n============================================================");
+    println!(" TernaryMatrix / TernaryVec  (BctTer32, AND+POPCNT dot)");
+    println!("============================================================\n");
+
+    // -- word-level primitive -------------------------------------------------
+    println!("--- BctTer32 word dot product ---");
+    let a = BctTer32::from_dec(1_000_000_007);
+    let b = BctTer32::from_dec(-999_999_937);
+    bench("BctTer32 bct_dot_word (32 trits, 4AND+2OR+2POPCNT)", ITERS, || {
+        std::hint::black_box(a.bct_dot_word(std::hint::black_box(b)));
+    });
+
+    // -- TernaryVec dot -------------------------------------------------------
+    println!("\n--- TernaryVec dot product ---");
+
+    let make_vec = |len: usize, stride: i8| -> TernaryVec {
+        let mut v = TernaryVec::zeros(len);
+        for i in 0..len {
+            v.set(i, ((i as i8 % 3) - 1) * stride);
+        }
+        v
+    };
+
+    let v32a = make_vec(32, 1);
+    let v32b = make_vec(32, -1);
+    bench("TernaryVec dot  32-trit (1 word)", ITERS, || {
+        std::hint::black_box(v32a.dot(&v32b));
+    });
+
+    let v128a = make_vec(128, 1);
+    let v128b = make_vec(128, -1);
+    bench("TernaryVec dot 128-trit (4 words)", ITERS, || {
+        std::hint::black_box(v128a.dot(&v128b));
+    });
+
+    let v768a = make_vec(768, 1);
+    let v768b = make_vec(768, -1);
+    bench("TernaryVec dot 768-trit (24 words, BitNet hidden dim)", ITERS, || {
+        std::hint::black_box(v768a.dot(&v768b));
+    });
+
+    // -- TernaryMatrix matvec -------------------------------------------------
+    println!("\n--- TernaryMatrix matvec ---");
+
+    let make_mat = |rows: usize, cols: usize| -> TernaryMatrix {
+        let mut m = TernaryMatrix::zeros(rows, cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                m.set(r, c, ((r + c) % 3) as i8 - 1);
+            }
+        }
+        m
+    };
+
+    let m32  = make_mat(32, 32);
+    let x32  = make_vec(32, 1);
+    bench("TernaryMatrix matvec   32×32  (32 rows × 1 word)", ITERS / 10, || {
+        std::hint::black_box(m32.matvec(&x32));
+    });
+
+    let m128 = make_mat(128, 128);
+    let x128 = make_vec(128, 1);
+    bench("TernaryMatrix matvec  128×128 (128 rows × 4 words)", ITERS / 100, || {
+        std::hint::black_box(m128.matvec(&x128));
+    });
+
+    let m768 = make_mat(768, 768);
+    let x768 = make_vec(768, 1);
+    bench("TernaryMatrix matvec  768×768 (768 rows × 24 words)", ITERS / 1000, || {
+        std::hint::black_box(m768.matvec(&x768));
+    });
+}

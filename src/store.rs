@@ -1479,6 +1479,35 @@ impl BctTer32 {
             neg: (self.neg & !other.pos) | (other.neg & !self.pos),
         }
     }
+
+    /// Raw positive bitmask: bit `i` set ↔ trit `i` = +1.
+    #[inline(always)]
+    pub const fn pos_mask(self) -> u32 { self.pos }
+
+    /// Raw negative bitmask: bit `i` set ↔ trit `i` = −1.
+    #[inline(always)]
+    pub const fn neg_mask(self) -> u32 { self.neg }
+
+    /// Word-level ternary dot product: `Σ self[i] * other[i]` over 32 trit positions.
+    ///
+    /// Uses 4 AND + 2 OR + 2 POPCNT — no multiplications.
+    /// This is the core primitive for ternary matrix-vector multiplication.
+    ///
+    /// ```
+    /// use balanced_ternary::BctTer32;
+    ///
+    /// let a = BctTer32::from_dec(5);   // +-+
+    /// let b = BctTer32::from_dec(5);   // +-+
+    /// // dot(a,a) = (+1)(+1) + (-1)(-1) + (+1)(+1) = 3
+    /// assert_eq!(a.bct_dot_word(b), 3);
+    /// assert_eq!(a.bct_dot_word(a.bct_neg()), -3);
+    /// ```
+    #[inline(always)]
+    pub fn bct_dot_word(self, other: Self) -> i32 {
+        let pos = (self.pos & other.pos) | (self.neg & other.neg);
+        let neg = (self.pos & other.neg) | (self.neg & other.pos);
+        pos.count_ones() as i32 - neg.count_ones() as i32
+    }
 }
 
 impl DigitOperate for BctTer32 {

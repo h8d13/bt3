@@ -93,15 +93,13 @@ def main():
     if improvements:
         print(f"TOP {min(args.top, len(improvements))} IMPROVEMENTS:")
         for pct, before, after, name in improvements[: args.top]:
-            bar = "▓" * int(pct / 5)
-            print(f"  {pct:+6.1f}%  {before:6.1f} → {after:6.1f} ns  {bar}  {name}")
+            print(f"  {pct:+6.1f}%  {before:6.1f} -> {after:6.1f} ns  {name}")
         print()
 
     if regressions:
         print(f"TOP {min(args.top, len(regressions))} REGRESSIONS:")
         for pct, before, after, name in sorted(regressions)[-args.top :]:
-            bar = "░" * int(-pct / 5)
-            print(f"  {pct:+6.1f}%  {before:6.1f} → {after:6.1f} ns  {bar}  {name}")
+            print(f"  {pct:+6.1f}%  {before:6.1f} -> {after:6.1f} ns  {name}")
         print()
 
     if not improvements and not regressions:
