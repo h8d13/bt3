@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Compare two Divan benchmark output files.
+Compare two Divan benchmark output files showing both fastest and median.
+
+Fastest (minimum sample) reflects best-achievable latency with warm caches.
+Median captures typical latency including occasional OS scheduling noise.
+Regression detection uses fastest to avoid false positives from jitter.
 
 Usage:
   cargo bench 2>&1 | tee bench-baseline.txt
@@ -28,21 +32,21 @@ def parse_ns(text: str) -> float | None:
     return float(m.group(1)) * _UNITS[m.group(2)]
 
 
-def parse_divan(fname: str) -> dict[str, float]:
+def parse_divan(fname: str) -> dict[str, tuple[float | None, float | None]]:
     """
-    Parse a Divan bench output file into {flat/path: median_ns}.
+    Parse a Divan bench output file into {flat/path: (fastest_ns, median_ns)}.
 
     Divan tree structure uses Unicode box-drawing characters:
       ╰─  ├─  │   to show depth and siblings.
     We match the full line with a regex so that leading │ characters in the
     tree prefix don't collide with the │ column separators.
     """
-    results: dict[str, float] = {}
-    # stack of ancestor names indexed by depth (0 = top-level module)
+    results: dict[str, tuple[float | None, float | None]] = {}
     name_stack: list[str] = []
 
-    # Match: prefix (│  or    groups) + tree char (├─ or ╰─) + rest of line.
     _LINE_RE = re.compile(r"^((?:│\s{2}|\s{3})*)(├─|╰─)\s+(.*)")
+    # Divan appends the fastest sample directly to the name field.
+    _FASTEST_RE = re.compile(r'^(.*?)\s+([\d.]+\s*(?:ns|µs|us|ms|s))\s*$')
 
     with open(fname, encoding="utf-8") as f:
         for raw in f:
@@ -55,34 +59,47 @@ def parse_divan(fname: str) -> dict[str, float]:
             depth_str, _tree_char, rest = m.groups()
             depth = len(depth_str) // 3
 
-            # rest = "<name> [fastest_time]  │ slowest │ median │ ..."
-            # Find the first │ in rest to split name+fastest from timing cols.
+            # rest = "<name> [fastest_time]  │ slowest │ median │ mean │ ..."
             pipe = rest.find("│")
             if pipe == -1:
                 # Group header with no timing data — just track the name.
                 bench_name = rest.strip()
-                median_ns = None
+                fastest_ns = median_ns = None
             else:
                 name_part = rest[:pipe]
                 # timing_cols: ["", " slowest", " median", " mean", ...]
                 timing_cols = rest[pipe:].split("│")
                 median_ns = parse_ns(timing_cols[2]) if len(timing_cols) > 2 else None
-                # Strip the "fastest" time that Divan appends to the name field.
-                bench_name = re.sub(r'\s+[\d.]+\s*(?:ns|µs|us|ms|s)\s*$', '', name_part).strip()
+                # Extract the fastest time Divan appends to the name field.
+                fm = _FASTEST_RE.match(name_part)
+                if fm:
+                    bench_name = fm.group(1).strip()
+                    fastest_ns = parse_ns(fm.group(2))
+                else:
+                    bench_name = name_part.strip()
+                    fastest_ns = None
 
             if not bench_name:
                 continue
 
-            # Trim stack to current depth and push this name.
             name_stack = name_stack[:depth]
             name_stack.append(bench_name)
 
-            # Only record leaf nodes (those with timing data in the median column).
-            if median_ns is not None:
+            if fastest_ns is not None or median_ns is not None:
                 key = "/".join(name_stack)
-                results[key] = median_ns
+                results[key] = (fastest_ns, median_ns)
 
     return results
+
+
+def pct_change(before: float, after: float) -> float:
+    return (before - after) / before * 100
+
+
+def fmt_pct(p: float | None) -> str:
+    if p is None:
+        return "    n/a"
+    return f"{p:>+7.1f}%"
 
 
 def main():
@@ -105,22 +122,32 @@ def main():
     b = parse_divan(args.baseline)
     n = parse_divan(args.new)
 
+    # diffs: (fastest_pct, bf, af, bm, am, name)
     diffs = []
     for name in b:
-        if name in n:
-            before, after = b[name], n[name]
-            if before < args.min_ns and after < args.min_ns:
-                continue
-            pct = (before - after) / before * 100
-            diffs.append((pct, before, after, name))
+        if name not in n:
+            continue
+        bf, bm = b[name]
+        af, am = n[name]
+        # Use fastest for filtering and sorting; fall back to median if missing.
+        ref_before = bf if bf is not None else bm
+        ref_after  = af if af is not None else am
+        if ref_before is None or ref_after is None:
+            continue
+        if ref_before < args.min_ns and ref_after < args.min_ns:
+            continue
+        fp = pct_change(bf, af) if bf is not None and af is not None else None
+        mp = pct_change(bm, am) if bm is not None and am is not None else None
+        sort_key = fp if fp is not None else mp
+        diffs.append((sort_key, bf, af, bm, am, fp, mp, name))
 
     diffs.sort(reverse=True)
 
     only_base = sorted(set(b) - set(n))
     only_new  = sorted(set(n) - set(b))
 
-    improved  = sum(1 for p, *_ in diffs if p >  args.threshold)
-    regressed = sum(1 for p, *_ in diffs if p < -args.threshold)
+    improved  = sum(1 for r in diffs if r[0] is not None and r[0] >  args.threshold)
+    regressed = sum(1 for r in diffs if r[0] is not None and r[0] < -args.threshold)
     unchanged = len(diffs) - improved - regressed
 
     print(f"{args.baseline} -> {args.new}")
@@ -133,20 +160,30 @@ def main():
 
     rows = diffs
     if args.top:
-        # Top N regressions + top N improvements
-        regressions = [r for r in diffs if r[0] < -args.threshold][-args.top:]
-        improvements = [r for r in diffs if r[0] >  args.threshold][:args.top]
-        neutral = [r for r in diffs if abs(r[0]) <= args.threshold]
+        regressions  = [r for r in diffs if r[0] is not None and r[0] < -args.threshold][-args.top:]
+        improvements = [r for r in diffs if r[0] is not None and r[0] >  args.threshold][:args.top]
+        neutral      = [r for r in diffs if r[0] is None or abs(r[0]) <= args.threshold]
         rows = improvements + neutral + list(reversed(regressions))
 
-    col = max((len(name) for _, _, _, name in rows), default=0)
-    print(f"{'name':<{col}}  {'before':>8}  {'after':>8}  {'change':>8}")
-    print("-" * (col + 32))
-    for pct, before, after, name in rows:
-        flag = "  +" if pct > args.threshold else ("  -" if pct < -args.threshold else "   ")
-        print(f"{name:<{col}}  {before:>7.1f}ns  {after:>7.1f}ns  {pct:>+7.1f}%{flag}")
+    col = max((len(r[-1]) for r in rows), default=0)
+    hdr = f"{'name':<{col}}  {'bst_b':>7}  {'bst_a':>7}  {'Δbst':>8}  {'med_b':>7}  {'med_a':>7}  {'Δmed':>8}"
+    print(hdr)
+    print("-" * len(hdr))
+    for sort_key, bf, af, bm, am, fp, mp, name in rows:
+        flag = "  +" if (sort_key is not None and sort_key > args.threshold) \
+          else ("  -" if (sort_key is not None and sort_key < -args.threshold) else "   ")
+        bf_s = f"{bf:>6.1f}ns" if bf is not None else "     n/a"
+        af_s = f"{af:>6.1f}ns" if af is not None else "     n/a"
+        bm_s = f"{bm:>6.1f}ns" if bm is not None else "     n/a"
+        am_s = f"{am:>6.1f}ns" if am is not None else "     n/a"
+        print(f"{name:<{col}}  {bf_s}  {af_s}  {fmt_pct(fp)}  {bm_s}  {am_s}  {fmt_pct(mp)}{flag}")
 
-    actionable = sum(1 for p, before, _, _ in diffs if p < -args.threshold and before >= args.fail_min_ns)
+    # Regression exit code uses fastest (most reliable signal).
+    actionable = sum(
+        1 for _, bf, _, _, _, fp, _, _ in diffs
+        if fp is not None and fp < -args.threshold
+        and bf is not None and bf >= args.fail_min_ns
+    )
     if actionable:
         sys.exit(1)
 
