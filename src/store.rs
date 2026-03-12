@@ -2615,14 +2615,16 @@ impl UTer27 {
     pub const MAX: Self = Self(MASK27_H); // all 10 = 2 → 3^27 - 1
 
     #[inline] pub fn from_dec(v: u64) -> Self {
-        let mut n = v % 7_625_597_484_987; // 3^27
-        let mut word = 0u64;
-        let mut shift = 0u32;
-        while n > 0 {
-            word |= (UTER5_LUT[(n % 243) as usize] as u64) << shift;
-            n /= 243;
-            shift += 10;
-        }
+        // Fixed 6-iteration unroll: each 5-trit group derived from the original
+        // n by independent divisions (243^k for k=0..5) — no serial chain.
+        // 3^27 = 243^5 * 9, so the top group (k=5) is at most 8 < 243.
+        let n = v % 7_625_597_484_987; // 3^27
+        let word = (UTER5_LUT[(n % 243)                           as usize] as u64)
+                 | ((UTER5_LUT[((n /          243) % 243)         as usize] as u64) << 10)
+                 | ((UTER5_LUT[((n /        59049) % 243)         as usize] as u64) << 20)
+                 | ((UTER5_LUT[((n /     14348907) % 243)         as usize] as u64) << 30)
+                 | ((UTER5_LUT[((n /   3486784401) % 243)         as usize] as u64) << 40)
+                 | ((UTER5_LUT[(n /  847288609443)                as usize] as u64) << 50);
         Self(word)
     }
 
@@ -2742,14 +2744,12 @@ impl BTer9 {
     pub const MIN:  Self = Self(0);        // all 00 = −1 → −9841
 
     #[inline] pub fn from_dec(v: i32) -> Self {
-        // 3-trit chunk lookup: 3 iterations of divmod-by-27 instead of 9 of divmod-by-3.
-        let mut word = 0u32;
-        let mut n = (v + BTER9_BIAS as i32) as u32; // bias to unsigned 9-trit range
-        for k in 0..3u32 {
-            let chunk = (n % 27) as usize;
-            word |= (CHUNK3[chunk] as u32) << (6 * k);
-            n /= 27;
-        }
+        // Unrolled: all 3 quotients computed from the original n directly —
+        // independent reciprocal-multiplies, no serial chain.
+        let n = (v + BTER9_BIAS as i32) as u32;
+        let word = (CHUNK3[(n % 27)         as usize] as u32)
+                 | ((CHUNK3[((n / 27) % 27) as usize] as u32) <<  6)
+                 | ((CHUNK3[(n / 729)        as usize] as u32) << 12);
         Self(word)
     }
 
@@ -2846,16 +2846,23 @@ impl BTer27 {
     pub const MIN:  Self = Self(0);
 
     #[inline] pub fn from_dec(v: i64) -> Self {
-        // 3-trit chunk lookup: 9 iterations of divmod-by-27 instead of 27 of divmod-by-3.
+        // Split into three independent 9-trit groups — mirrors BTer27::to_dec.
+        // Two 64-bit divisions extract lo/mid/hi from n; then each group uses
+        // three independent 32-bit divisions (BTer9::from_dec unroll), giving
+        // much better ILP with smaller code than 9 serial 64-bit divmod-27 steps.
         const BIAS: i64 = 3_812_798_742_493; // (3^27 - 1) / 2
-        let mut word = 0u64;
-        let mut n = (v + BIAS) as u64; // bias to unsigned 27-trit range
-        for k in 0..9u32 {
-            let chunk = (n % 27) as usize;
-            word |= (CHUNK3[chunk] as u64) << (6 * k);
-            n /= 27;
-        }
-        Self(word)
+        let n = (v + BIAS) as u64;
+        // lo/mid/hi are independent; hi needs only one 64-bit division.
+        let lo  = (n % 19683) as u32;                   // 3^9 = 19683
+        let mid = ((n / 19683) % 19683) as u32;
+        let hi  = (n / 387_420_489) as u32;             // 19683^2
+        // Each group: 3 independent u32 divmod-27 lookups (same as BTer9::from_dec).
+        macro_rules! enc9 { ($m:expr) => {
+            (CHUNK3[($m % 27)         as usize] as u64)
+          | ((CHUNK3[(($m / 27) % 27) as usize] as u64) <<  6)
+          | ((CHUNK3[($m / 729)       as usize] as u64) << 12)
+        }}
+        Self(enc9!(lo) | (enc9!(mid) << 18) | (enc9!(hi) << 36))
     }
 
     #[inline] pub fn to_dec(&self) -> i64 {
