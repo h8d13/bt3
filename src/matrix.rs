@@ -1,6 +1,6 @@
-//! Ternary matrix types built on [`BctTer32`] word storage.
+//! Ternary matrix types built on [`BctTer64`] word storage.
 //!
-//! Each word encodes 32 trits in BCT (Binary-Coded Ternary) format.
+//! Each word holds 64 trits as two `u64` bitmasks (`pos`, `neg`).
 //! The dot product uses 4 AND + 2 OR + 2 POPCNT per word — no multiplications.
 //!
 //! # Example
@@ -22,32 +22,28 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::store::BctTer32;
+use crate::store::BctTer64;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Number of [`BctTer32`] words needed to hold `n` trits.
 #[inline(always)]
-fn words_for(n: usize) -> usize { (n + 31) / 32 }
+fn words_for(n: usize) -> usize { (n + 63) / 64 }
 
-/// Set a single trit bit in a BCT word pair.
 #[inline(always)]
-fn set_trit_in_word(w: BctTer32, bit: u32, v: i8) -> BctTer32 {
-    let mask = 1u32 << bit;
-    let mut pos = w.pos_mask() & !mask;
-    let mut neg = w.neg_mask() & !mask;
+fn word_set(w: BctTer64, b: u32, v: i8) -> BctTer64 {
+    let mask = 1u64 << b;
+    let pos = w.pos_mask() & !mask;
+    let neg = w.neg_mask() & !mask;
     match v {
-        1  => pos |= mask,
-        -1 => neg |= mask,
-        _  => {}
+        1  => BctTer64::new(pos | mask, neg),
+        -1 => BctTer64::new(pos, neg | mask),
+        _  => BctTer64::new(pos, neg),
     }
-    BctTer32::new(pos, neg)
 }
 
-/// Read a single trit from a BCT word.
 #[inline(always)]
-fn get_trit_from_word(w: BctTer32, bit: u32) -> i8 {
-    let mask = 1u32 << bit;
+fn word_get(w: BctTer64, b: u32) -> i8 {
+    let mask = 1u64 << b;
     if w.pos_mask() & mask != 0 { 1 }
     else if w.neg_mask() & mask != 0 { -1 }
     else { 0 }
@@ -55,12 +51,13 @@ fn get_trit_from_word(w: BctTer32, bit: u32) -> i8 {
 
 // ── TernaryVec ───────────────────────────────────────────────────────────────
 
-/// A dense ternary vector stored as packed [`BctTer32`] words.
+/// A dense ternary vector stored as packed [`BctTer64`] words.
 ///
-/// Words are stored in little-endian trit order: word 0 holds trits 0..31,
-/// word 1 holds trits 32..63, etc.
+/// Words are stored in little-endian trit order: word 0 holds trits 0..63,
+/// word 1 holds trits 64..127, etc.
+#[derive(Clone)]
 pub struct TernaryVec {
-    words: Vec<BctTer32>,
+    words: Vec<BctTer64>,
     len: usize,
 }
 
@@ -68,7 +65,7 @@ impl TernaryVec {
     /// Create a zero vector of `len` trits.
     pub fn zeros(len: usize) -> Self {
         Self {
-            words: (0..words_for(len)).map(|_| BctTer32::ZERO).collect(),
+            words: (0..words_for(len)).map(|_| BctTer64::ZERO).collect(),
             len,
         }
     }
@@ -87,8 +84,8 @@ impl TernaryVec {
     /// Panics if `i >= self.len()`.
     pub fn set(&mut self, i: usize, v: i8) {
         assert!(i < self.len, "trit index out of bounds");
-        let (w, b) = (i / 32, (i % 32) as u32);
-        self.words[w] = set_trit_in_word(self.words[w], b, v);
+        let (w, b) = (i / 64, (i % 64) as u32);
+        self.words[w] = word_set(self.words[w], b, v);
     }
 
     /// Get trit at position `i`: −1, 0, or +1.
@@ -97,13 +94,9 @@ impl TernaryVec {
     /// Panics if `i >= self.len()`.
     pub fn get(&self, i: usize) -> i8 {
         assert!(i < self.len, "trit index out of bounds");
-        let (w, b) = (i / 32, (i % 32) as u32);
-        get_trit_from_word(self.words[w], b)
+        let (w, b) = (i / 64, (i % 64) as u32);
+        word_get(self.words[w], b)
     }
-
-    /// Raw word slice.
-    #[inline(always)]
-    pub fn words(&self) -> &[BctTer32] { &self.words }
 
     /// Ternary dot product with another vector of the same length.
     ///
@@ -142,11 +135,12 @@ pub fn dot(a: &TernaryVec, b: &TernaryVec) -> i32 {
 
 // ── TernaryMatrix ─────────────────────────────────────────────────────────────
 
-/// A row-major ternary matrix stored as packed [`BctTer32`] words.
+/// A row-major ternary matrix stored as packed 64-trit BCT words.
 ///
 /// Row `r` occupies words `data[r*row_stride .. (r+1)*row_stride]`.
+#[derive(Clone)]
 pub struct TernaryMatrix {
-    data: Vec<BctTer32>,
+    data: Vec<BctTer64>,
     rows: usize,
     cols: usize,
     row_stride: usize,
@@ -157,7 +151,7 @@ impl TernaryMatrix {
     pub fn zeros(rows: usize, cols: usize) -> Self {
         let row_stride = words_for(cols);
         Self {
-            data: (0..rows * row_stride).map(|_| BctTer32::ZERO).collect(),
+            data: (0..rows * row_stride).map(|_| BctTer64::ZERO).collect(),
             rows,
             cols,
             row_stride,
@@ -178,8 +172,8 @@ impl TernaryMatrix {
     /// Panics if `row >= self.rows()` or `col >= self.cols()`.
     pub fn set(&mut self, row: usize, col: usize, v: i8) {
         assert!(row < self.rows && col < self.cols, "matrix index out of bounds");
-        let idx = row * self.row_stride + col / 32;
-        self.data[idx] = set_trit_in_word(self.data[idx], (col % 32) as u32, v);
+        let idx = row * self.row_stride + col / 64;
+        self.data[idx] = word_set(self.data[idx], (col % 64) as u32, v);
     }
 
     /// Get element at `(row, col)`: −1, 0, or +1.
@@ -188,25 +182,42 @@ impl TernaryMatrix {
     /// Panics if `row >= self.rows()` or `col >= self.cols()`.
     pub fn get(&self, row: usize, col: usize) -> i8 {
         assert!(row < self.rows && col < self.cols, "matrix index out of bounds");
-        let idx = row * self.row_stride + col / 32;
-        get_trit_from_word(self.data[idx], (col % 32) as u32)
+        let idx = row * self.row_stride + col / 64;
+        word_get(self.data[idx], (col % 64) as u32)
+    }
+
+    /// Matrix-vector product, writing results into a caller-provided slice.
+    ///
+    /// Avoids the heap allocation of [`matvec`](Self::matvec). Use this in hot paths.
+    ///
+    /// # Panics
+    /// Panics if `x.len() != self.cols()` or `out.len() != self.rows()`.
+    #[inline]
+    pub fn matvec_into(&self, x: &TernaryVec, out: &mut [i32]) {
+        assert_eq!(x.len(), self.cols, "matvec: vector length must match matrix columns");
+        assert_eq!(out.len(), self.rows, "matvec: output length must match matrix rows");
+        let xw = &x.words;
+        let stride = self.row_stride;
+        for r in 0..self.rows {
+            let base = r * stride;
+            let mut acc = 0i32;
+            for w in 0..stride {
+                acc += self.data[base + w].bct_dot_word(xw[w]);
+            }
+            out[r] = acc;
+        }
     }
 
     /// Matrix-vector product `self · x` → `Vec<i32>` of length `self.rows()`.
     ///
-    /// Each output element is the dot product of one matrix row with `x`:
-    /// 4 AND + 2 OR + 2 POPCNT per 32-trit word, no multiplications.
+    /// Allocates the output on every call. For repeated use in hot paths, prefer
+    /// [`matvec_into`](Self::matvec_into) with a pre-allocated buffer.
     ///
     /// # Panics
     /// Panics if `x.len() != self.cols()`.
     pub fn matvec(&self, x: &TernaryVec) -> Vec<i32> {
-        assert_eq!(x.len(), self.cols, "matvec: vector length must match matrix columns");
-        let xw = x.words();
-        (0..self.rows)
-            .map(|r| {
-                let row = &self.data[r * self.row_stride .. (r + 1) * self.row_stride];
-                row.iter().zip(xw.iter()).map(|(wa, wb)| wa.bct_dot_word(*wb)).sum()
-            })
-            .collect()
+        let mut out = alloc::vec![0i32; self.rows];
+        self.matvec_into(x, &mut out);
+        out
     }
 }

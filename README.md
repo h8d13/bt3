@@ -42,7 +42,7 @@ in your [dependency declaration](https://doc.rust-lang.org/cargo/reference/featu
 version = "*.*"
 default-features = false
 # Choose which ones to enable
-features = ["ternary-string", "tryte", "ternary-store", "terscii"]
+features = ["ternary-string", "tryte", "ternary-store", "terscii", "ternary-matrix"]
 ```
 
 ### `ternary-string`
@@ -54,6 +54,13 @@ features = ["ternary-string", "tryte", "ternary-store", "terscii"]
 > Requires `ternary-string`.
 
 Provides `Tryte<N>`: a stack-allocated, `Copy`, fixed-width ternary number of exactly `N` trits. Implements `DigitOperate`.
+
+### `ternary-matrix`
+
+> Requires `ternary-store`.
+
+Provides `TernaryVec` and `TernaryMatrix`: dense ternary linear algebra backed by packed 64-trit BCT words.
+Dot product uses 4 AND + 2 OR + 2 POPCNT per 64-trit word, no multiplications.
 
 ### `ternary-store`
 
@@ -68,6 +75,7 @@ Provides fixed-width storage types optimised for performance and memory:
 | `Ter40` | `i64` | 40 | ±(3⁴⁰−1)/2 | Fastest arithmetic — native i64 ops |
 | `IlTer40` | `u128` | 40 | ±(3⁴⁰−1)/2 | Interleaved BCT; O(1) trit logic on all 40 trits |
 | `BctTer32` | `(u32, u32)` | 32 | ±(3³²−1)/2 | Split BCT; O(1) trit-logical ops |
+| `BctTer64` | `(u64, u64)` | 64 | ±(3⁶⁴−1)/2 | Split BCT; word type for matrix ops |
 | `IlBctTer32` | `u64` | 32 | ±(3³²−1)/2 | Jones interleaved BCT; O(1) logic + arithmetic |
 | `UTer9` | `u32` | 9 | 0..19682 | Unsigned BCT, Jones `uter9_t`; O(1) `uter_add` |
 | `UTer27` | `u64` | 27 | 0..7625597484986 | Unsigned BCT, Jones `uter27_t`; O(1) `uter_add` |
@@ -85,6 +93,7 @@ Choosing the right type for your use case matters:
 - **O(1) bitwise over all trits at once** → `IlTer40` or `IlBctTer32`
 - **O(1) arithmetic + logic combined** → `IlBctTer32` / `UTer9` / `UTer27`
 - **Unsigned base-3 counting** → `UTer9` / `UTer27` (BCT addition via Jones BCD trick)
+- **Dense ternary linear algebra** → `TernaryVec` / `TernaryMatrix` (`BctTer64` word packing, multiply-free dot)
 
 ## Digit Ops
 

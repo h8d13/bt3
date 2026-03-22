@@ -8,7 +8,7 @@
 # bad cache-line positions when any function's code size changes.
 [build]
 rustflags = [
-  "-C", "target-feature=+bmi2",
+  "-C", "target-feature=+bmi2,+popcnt,+avx2",
   "-C", "llvm-args=-align-all-functions=64",
   "-C", "llvm-args=-align-all-nofallthru-blocks=64",
 ]

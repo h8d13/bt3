@@ -1360,7 +1360,7 @@ mod conversions;
 mod store;
 
 #[cfg(feature = "ternary-store")]
-pub use crate::store::{BctTer32, IlBctTer32, Ter40, IlTer40, DataTernary, TritsChunk,
+pub use crate::store::{BctTer32, BctTer64, IlBctTer32, Ter40, IlTer40, DataTernary, TritsChunk,
                         UTer9, UTer27, BTer9, BTer27};
 
 #[cfg(feature = "ternary-matrix")]

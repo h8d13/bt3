@@ -1711,6 +1711,188 @@ impl core::fmt::Display for BctTer32 {
 }
 
 // ============================================================================
+// BctTer64 — split BCT: 64 balanced trits in two u64s
+// ============================================================================
+
+/// 64 balanced ternary trits stored as two `u64` bitmasks.
+///
+/// `pos`: bit `i` set ↔ trit `i` = +1.
+/// `neg`: bit `i` set ↔ trit `i` = −1.
+/// Both clear ↔ trit `i` = 0.  Invariant: `pos & neg == 0`.
+///
+/// Primarily used as the inner word type for [`crate::matrix::TernaryVec`] and
+/// [`crate::matrix::TernaryMatrix`]: twice as many trits per loop iteration as
+/// [`BctTer32`], with the same instruction count per word.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Default)]
+pub struct BctTer64 {
+    pos: u64,
+    neg: u64,
+}
+
+impl BctTer64 {
+    /// All trits zero.
+    pub const ZERO: Self = Self { pos: 0, neg: 0 };
+    /// All 64 trits = +1.
+    pub const MAX: Self = Self { pos: u64::MAX, neg: 0 };
+    /// All 64 trits = −1.
+    pub const MIN: Self = Self { pos: 0, neg: u64::MAX };
+
+    /// Construct directly from raw bitmasks.
+    ///
+    /// # Panics (debug builds only)
+    /// Panics if `pos & neg != 0` (invariant violation).
+    #[inline]
+    pub const fn new(pos: u64, neg: u64) -> Self {
+        debug_assert!(pos & neg == 0, "BctTer64: pos and neg masks overlap");
+        Self { pos, neg }
+    }
+
+    /// Build from a `Ternary` (truncates to 64 trits if longer).
+    pub fn from_ternary(t: &Ternary) -> Self {
+        let digits = t.to_digit_slice();
+        let len = digits.len().min(64);
+        let mut pos = 0u64;
+        let mut neg = 0u64;
+        for (bit, &d) in digits.iter().rev().take(len).enumerate() {
+            match d {
+                Digit::Pos  => pos |= 1u64 << bit,
+                Digit::Neg  => neg |= 1u64 << bit,
+                Digit::Zero => {}
+            }
+        }
+        Self { pos, neg }
+    }
+
+    // ── O(1) Jones BCT bitwise operations ─────────────────────────────────────
+
+    /// Trit-wise negation: `Pos↔Neg`, `Zero→Zero`. O(1).
+    #[inline(always)]
+    pub const fn bct_neg(self) -> Self { Self { pos: self.neg, neg: self.pos } }
+
+    /// Trit-wise AND (min). O(1).
+    #[inline(always)]
+    pub const fn bct_and(self, other: Self) -> Self {
+        Self { pos: self.pos & other.pos, neg: self.neg | other.neg }
+    }
+
+    /// Trit-wise OR (max). O(1).
+    #[inline(always)]
+    pub const fn bct_or(self, other: Self) -> Self {
+        Self { pos: self.pos | other.pos, neg: self.neg & other.neg }
+    }
+
+    /// Trit-wise XOR = −(a·b). O(1).
+    #[inline(always)]
+    pub const fn bct_xor(self, other: Self) -> Self {
+        Self {
+            pos: (self.pos & other.neg) | (self.neg & other.pos),
+            neg: (self.pos & other.pos) | (self.neg & other.neg),
+        }
+    }
+
+    /// Trit-wise consensus: `+` where both `+`, `−` where both `−`, `0` elsewhere. O(1).
+    #[inline(always)]
+    pub const fn bct_consensus(self, other: Self) -> Self {
+        Self { pos: self.pos & other.pos, neg: self.neg & other.neg }
+    }
+
+    /// Trit-wise accept-anything (`sign(a+b)`): non-zero wins, conflict → zero. O(1).
+    #[inline(always)]
+    pub const fn bct_accept_anything(self, other: Self) -> Self {
+        Self {
+            pos: (self.pos & !other.neg) | (other.pos & !self.neg),
+            neg: (self.neg & !other.pos) | (other.neg & !self.pos),
+        }
+    }
+
+    /// Raw positive bitmask: bit `i` set ↔ trit `i` = +1.
+    #[inline(always)]
+    pub const fn pos_mask(self) -> u64 { self.pos }
+
+    /// Raw negative bitmask: bit `i` set ↔ trit `i` = −1.
+    #[inline(always)]
+    pub const fn neg_mask(self) -> u64 { self.neg }
+
+    /// Word-level ternary dot product: `Σ self[i] * other[i]` over 64 trit positions.
+    ///
+    /// Uses 4 AND + 2 OR + 2 POPCNT — no multiplications.
+    ///
+    /// ```
+    /// use balanced_ternary::BctTer64;
+    ///
+    /// let mut a = BctTer64::ZERO;
+    /// let mut b = BctTer64::ZERO;
+    /// // set trits 0..2 to [+1, -1, +1] in a, [+1, +1, +1] in b
+    /// // dot = (+1)(+1) + (-1)(+1) + (+1)(+1) = 1
+    /// let a = BctTer64::new(0b101, 0b010);
+    /// let b = BctTer64::new(0b111, 0b000);
+    /// assert_eq!(a.bct_dot_word(b), 1);
+    /// assert_eq!(a.bct_dot_word(a.bct_neg()), -3);
+    /// ```
+    #[inline(always)]
+    pub fn bct_dot_word(self, other: Self) -> i32 {
+        let pos = (self.pos & other.pos) | (self.neg & other.neg);
+        let neg = (self.pos & other.neg) | (self.neg & other.pos);
+        pos.count_ones() as i32 - neg.count_ones() as i32
+    }
+}
+
+impl Neg for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn neg(self) -> Self { self.bct_neg() }
+}
+impl Not for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn not(self) -> Self { self.bct_neg() }
+}
+impl BitAnd for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self { self.bct_and(rhs) }
+}
+impl BitOr for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self { self.bct_or(rhs) }
+}
+impl BitXor for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self { self.bct_xor(rhs) }
+}
+impl Shl<usize> for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn shl(self, rhs: usize) -> Self {
+        if rhs >= 64 { Self::ZERO }
+        else { Self { pos: self.pos << rhs, neg: self.neg << rhs } }
+    }
+}
+impl Shr<usize> for BctTer64 {
+    type Output = Self;
+    #[inline(always)]
+    fn shr(self, rhs: usize) -> Self {
+        if rhs >= 64 { Self::ZERO }
+        else { Self { pos: self.pos >> rhs, neg: self.neg >> rhs } }
+    }
+}
+impl From<Ternary> for BctTer64 {
+    fn from(t: Ternary) -> Self { Self::from_ternary(&t) }
+}
+impl core::fmt::Display for BctTer64 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let digits: Vec<Digit> = (0..64u32).rev().map(|bit| {
+            if self.pos & (1u64 << bit) != 0 { Digit::Pos }
+            else if self.neg & (1u64 << bit) != 0 { Digit::Neg }
+            else { Digit::Zero }
+        }).collect();
+        write!(f, "{}", Ternary::new(digits))
+    }
+}
+
+// ============================================================================
 // IlBctTer32 — Jones interleaved BCT: 32 balanced trits in one u64
 // ============================================================================
 
