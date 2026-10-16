@@ -2,7 +2,7 @@
 """
 Compare per-function instruction counts between two rustc asm dumps.
 
-Deterministic counterpart to bench-compare.py: timing noise on a laptop can
+Deterministic counterpart to tests/bench.rs: timing noise on a laptop can
 exceed ±50 %, instruction diffs do not.
 
 Usage:

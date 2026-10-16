@@ -1,14 +1,11 @@
 //! Performance benchmarks using only std::time (no extra dependencies).
 //!
-//! Run with: cargo test --release --test bench -- --nocapture --test-threads=1
+//! Run with:
+//!   cargo test --release --all-features --test bench -- --nocapture --test-threads=1
 //!
-//! ## Baseline comparison
-//!
-//! Save a baseline with:
-//!   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-baseline.txt
-//!
-//! After changes, compare with the Python script:
-//!   cargo test --release --test bench -- --nocapture --test-threads=1 2>&1 | tee bench-new.txt
+//! `--all-features` is needed for the `ternary-matrix` benches. Timing on a laptop
+//! is noisy; for a deterministic check compare instruction counts with
+//! `asm-compare.py`.
 
 use balanced_ternary::concepts::DigitOperate;
 use balanced_ternary::terscii;
@@ -20,8 +17,7 @@ const ITERS: u32 = 500_000;
 
 /// Runs `f` for `iters` iterations across `PASSES` timed samples (after warmup).
 ///
-/// Reports best (fastest sample) and median.  The compare script keys on
-/// `(X.X ns/op)` for best and `M ops/s` for the label — both kept stable.
+/// Reports best (fastest sample) and median.
 fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
     const PASSES: usize = 9;
 
@@ -52,7 +48,6 @@ fn bench<F: FnMut()>(label: &str, iters: u32, mut f: F) {
         (ops_sec, "  ops/s")
     };
 
-    // `(X.X ns/op)` is parsed by bench-compare.py for best-latency tracking.
     println!(
         "  {:<52}  {:>8.2} {}  ({:>6.1} ns/op)  med {:>6.1} ns  [{} × {}]",
         label, ops_val, ops_unit, best_ns, median_ns, PASSES, iters

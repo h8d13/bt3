@@ -21,3 +21,5 @@ Before merging new code, ensure that:
 
 This usually involves: emitting LLVM ASM: `cargo rustc --release --lib --all-features -- --emit asm -C codegen-units=1`
 Comparing count + time/op. Promote or discard...
+
+We do not want any cfg `target_feature` gating. We let `llvm` do this through compiling with target.
