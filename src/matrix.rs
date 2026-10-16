@@ -282,7 +282,7 @@ impl TernaryMatrix {
 mod tests {
     use super::*;
 
-    // small LCG: tests stay independent of the getrandom feature
+    // small LCG: deterministic, no RNG dependency
     fn lcg(s: &mut u64) -> u64 {
         *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         *s >> 33

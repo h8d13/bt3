@@ -1025,51 +1025,6 @@ fn bench_terscii() {
     }
 }
 
-// ---------------------------------------------------------------------------
-/// Getrandom: syscall-backed vs SplitMix64 PRNG random ternary values.
-#[test]
-fn bench_getrandom() {
-    use balanced_ternary::getrandom::*;
-
-    println!("\n============================================================");
-    println!("  GETRANDOM — syscall vs SplitMix64 PRNG");
-    println!("============================================================");
-    println!("  Syscall variants: ~180-200 ns each (one getrandom(2) per call)");
-    println!("  SplitMix64 variants: ~2-4 ns (seeded once, pure arithmetic)");
-
-    println!("\n--- Syscall-backed (one kernel call per value) ---");
-    bench("rand_digit()         (1 syscall, rejection loop)", ITERS / 100, || {
-        std::hint::black_box(rand_digit());
-    });
-    bench("rand_bter9()         (1 syscall, rejection loop)", ITERS / 100, || {
-        std::hint::black_box(rand_bter9());
-    });
-    bench("rand_bter27()        (1 syscall, rejection loop)", ITERS / 100, || {
-        std::hint::black_box(rand_bter27());
-    });
-    bench("rand_uter27()        (1 syscall, rejection loop)", ITERS / 100, || {
-        std::hint::black_box(rand_uter27());
-    });
-
-    println!("\n--- SplitMix64 PRNG (seeded once, no syscall per call) ---");
-    let mut rng = SplitMix64::new();
-    bench("SplitMix64::next_u64 (pure arithmetic, no syscall)", ITERS, || {
-        std::hint::black_box(rng.next_u64());
-    });
-    let mut rng = SplitMix64::new();
-    bench("SplitMix64::rand_bter9()  (~0 ns PRNG + from_dec)", ITERS, || {
-        std::hint::black_box(rng.rand_bter9());
-    });
-    let mut rng = SplitMix64::new();
-    bench("SplitMix64::rand_bter27() (~0 ns PRNG + from_dec)", ITERS, || {
-        std::hint::black_box(rng.rand_bter27());
-    });
-    let mut rng = SplitMix64::new();
-    bench("SplitMix64::rand_uter27() (~0 ns PRNG + from_dec)", ITERS, || {
-        std::hint::black_box(rng.rand_uter27());
-    });
-}
-
 #[test]
 #[cfg(feature = "ternary-matrix")]
 fn bench_matrix() {

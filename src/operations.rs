@@ -313,21 +313,21 @@ impl Mul<&Ternary> for &Ternary {
         // Pos=1 and all rebalanced values are in {-1,0,1}, we transmute
         // each i8 directly to Digit — no match/branch per element.
         #[inline(always)]
-        unsafe fn i8_to_digit(v: i8) -> Digit {
+        fn i8_to_digit(v: i8) -> Digit {
             debug_assert!(
                 v >= -1 && v <= 1,
                 "balanced_carry rebalancing produced invalid trit value: {v}"
             );
-            core::mem::transmute::<i8, Digit>(v)
+            unsafe { core::mem::transmute::<i8, Digit>(v) }
         }
 
         let first_nz = acc.iter().position(|&v| v != 0);
         match (extra, first_nz) {
             (Some(c), _) => {
                 let mut digits = Vec::with_capacity(1 + rlen);
-                digits.push(unsafe { i8_to_digit(c) });
+                digits.push(i8_to_digit(c));
                 for &v in acc.iter() {
-                    digits.push(unsafe { i8_to_digit(v) });
+                    digits.push(i8_to_digit(v));
                 }
                 Ternary::new(digits)
             }
@@ -335,7 +335,7 @@ impl Mul<&Ternary> for &Ternary {
             (None, Some(pos)) => {
                 let mut digits = Vec::with_capacity(rlen - pos);
                 for &v in &acc[pos..] {
-                    digits.push(unsafe { i8_to_digit(v) });
+                    digits.push(i8_to_digit(v));
                 }
                 Ternary::new(digits)
             }
