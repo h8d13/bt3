@@ -32,7 +32,7 @@ This fork extends the original [`balanced-ternary`](https://github.com/Trehinos/
 
 ## Library features
 
-All features are enabled by default.
+All features except `ternary-matrix` are enabled by default.
 
 To enable only some features, use the `default-features` option
 in your [dependency declaration](https://doc.rust-lang.org/cargo/reference/features.html#dependency-features):
@@ -61,6 +61,10 @@ Provides `Tryte<N>`: a stack-allocated, `Copy`, fixed-width ternary number of ex
 
 Provides `TernaryVec` and `TernaryMatrix`: dense ternary linear algebra backed by packed 64-trit BCT words.
 Dot product uses 4 AND + 2 OR + 2 POPCNT per 64-trit word, no multiplications.
+
+Also provides `quant`: bit-exact block codecs for ternary weight formats (`TQ2_0`),
+and `TernaryMatrix::from_tq2_0` to load them. Scales are returned as raw fp16 bits;
+file parsing (GGUF) stays with the caller.
 
 ### `ternary-store`
 

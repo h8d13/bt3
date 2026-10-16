@@ -1262,6 +1262,9 @@ pub use crate::store::{BctTer32, BctTer64, IlBctTer32, Ter40, IlTer40, DataTerna
 #[cfg(feature = "ternary-matrix")]
 pub mod matrix;
 
+#[cfg(feature = "ternary-matrix")]
+pub mod quant;
+
 #[cfg(feature = "tryte")]
 mod tryte;
 

@@ -22,6 +22,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+use crate::quant::{tq2_0_decode, TQ2_0_BLOCK_BYTES, TQ2_0_BLOCK_TRITS};
 use crate::store::BctTer64;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -156,6 +157,48 @@ impl TernaryMatrix {
             cols,
             row_stride,
         }
+    }
+
+    /// Build a `rows × cols` matrix from row-major TQ2_0 blocks.
+    ///
+    /// Returns the matrix and the raw fp16 scale bits of each block,
+    /// `cols / 256` per row in row order. Returns `None` if any block holds an
+    /// invalid code (see [`tq2_0_decode`](crate::quant::tq2_0_decode)).
+    ///
+    /// # Panics
+    /// Panics if `cols` is not a multiple of 256, or if `data.len()` is not
+    /// `rows * cols / 256 * 66`.
+    ///
+    /// # Example
+    /// ```
+    /// use balanced_ternary::matrix::TernaryMatrix;
+    /// use balanced_ternary::quant::tq2_0_encode;
+    /// use balanced_ternary::BctTer64;
+    ///
+    /// let block = tq2_0_encode(&[BctTer64::new(0b1, 0b10); 4], 0x3800);
+    /// let (m, scales) = TernaryMatrix::from_tq2_0(1, 256, &block).unwrap();
+    /// assert_eq!((m.get(0, 0), m.get(0, 1), m.get(0, 2)), (1, -1, 0));
+    /// assert_eq!(scales, [0x3800]);
+    /// ```
+    pub fn from_tq2_0(rows: usize, cols: usize, data: &[u8])
+        -> Option<(Self, Vec<u16>)>
+    {
+        assert!(cols.is_multiple_of(TQ2_0_BLOCK_TRITS),
+                "from_tq2_0: cols must be a multiple of 256");
+        let blocks = rows * cols / TQ2_0_BLOCK_TRITS;
+        assert_eq!(data.len(), blocks * TQ2_0_BLOCK_BYTES,
+                   "from_tq2_0: data length must match rows × cols");
+        // 256 trits = 4 whole words, so blocks concatenate into rows with
+        // no padding: block order is word order
+        let mut m = Self::zeros(rows, cols);
+        let mut scales = Vec::with_capacity(blocks);
+        let (chunks, _) = data.as_chunks::<TQ2_0_BLOCK_BYTES>();
+        for (words, block) in m.data.as_chunks_mut::<4>().0.iter_mut().zip(chunks) {
+            let (w, d) = tq2_0_decode(block)?;
+            *words = w;
+            scales.push(d);
+        }
+        Some((m, scales))
     }
 
     /// Number of rows.
@@ -340,5 +383,50 @@ mod tests {
     #[should_panic(expected = "matvec_i8: vector length")]
     fn matvec_i8_rejects_bad_len() {
         TernaryMatrix::zeros(2, 10).matvec_i8(&[0; 9]);
+    }
+
+    // one block per 4 words, scale bits = flat block index to check ordering
+    fn to_tq2_0(m: &TernaryMatrix) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, words) in m.data.as_chunks::<4>().0.iter().enumerate() {
+            out.extend(crate::quant::tq2_0_encode(words, i as u16));
+        }
+        out
+    }
+
+    #[test]
+    fn from_tq2_0_matches_source() {
+        let mut s = 3;
+        for &(rows, cols) in &[(1, 256), (3, 512), (2, 768), (0, 256)] {
+            let m = rand_mat(rows, cols, &mut s);
+            let data = to_tq2_0(&m);
+            let (back, scales) = TernaryMatrix::from_tq2_0(rows, cols, &data).unwrap();
+            let blocks = (rows * cols / 256) as u16;
+            assert_eq!(scales, (0..blocks).collect::<Vec<_>>(), "{rows}x{cols}");
+            for r in 0..rows {
+                for c in 0..cols {
+                    assert_eq!(back.get(r, c), m.get(r, c), "({r}, {c}) of {rows}x{cols}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn from_tq2_0_rejects_bad_block() {
+        let mut data = to_tq2_0(&TernaryMatrix::zeros(2, 256));
+        data[66 + 5] = 0xFF; // second block
+        assert!(TernaryMatrix::from_tq2_0(2, 256, &data).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "from_tq2_0: cols must be a multiple of 256")]
+    fn from_tq2_0_rejects_bad_cols() {
+        TernaryMatrix::from_tq2_0(1, 255, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "from_tq2_0: data length")]
+    fn from_tq2_0_rejects_bad_len() {
+        TernaryMatrix::from_tq2_0(1, 256, &[0; 65]);
     }
 }

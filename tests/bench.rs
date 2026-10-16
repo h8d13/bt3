@@ -1110,4 +1110,14 @@ fn bench_matrix() {
         m768.matvec_i8_into(std::hint::black_box(&xi768), &mut out768);
         std::hint::black_box(&out768);
     });
+
+    // -- TQ2_0 load (ternary weight blocks → TernaryMatrix) ------------------
+    println!("\n--- TQ2_0 decode ---");
+
+    let block = balanced_ternary::quant::tq2_0_encode(&[a64; 4], 0x3800);
+    let tq768 = block.repeat(768 * 768 / 256);
+    bench("TernaryMatrix from_tq2_0 768×768 (2304 blocks)", ITERS / 1000, || {
+        std::hint::black_box(
+            TernaryMatrix::from_tq2_0(768, 768, std::hint::black_box(&tq768)));
+    });
 }
