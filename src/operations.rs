@@ -33,6 +33,8 @@ use crate::{Digit, Ternary};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Sub, Shl, Shr};
+#[cfg(test)]
+use alloc::string::ToString;
 
 /// Balanced ternary carry decomposition.
 ///
@@ -134,8 +136,8 @@ fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
         // Single-pass copy into Vec<Digit> — no reverse, no memmove.
         let digits = scratch[start..=len]
             .iter()
-            // SAFETY: balanced_carry output and carry are always in {-1, 0, 1}.
-            .map(|&v| unsafe { core::mem::transmute::<i8, Digit>(v) })
+            // Range: balanced_carry output and carry are always in {-1, 0, 1}.
+            .map(|&v| Digit::from_trit(v))
             .collect();
         return Ternary::new(digits);
     }
@@ -148,7 +150,7 @@ fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
             let db_val = if negate_b { -db.to_i8() } else { db.to_i8() };
             let (c, d) = balanced_carry(da.to_i8() + db_val + carry);
             carry = c;
-            digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
+            digits.push(Digit::from_trit(d));
         }
     } else {
         let (oa, ob) = (len - a.len(), len - b.len());
@@ -158,16 +160,16 @@ fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
             if negate_b { db = -db; }
             let (c, d) = balanced_carry(da + db + carry);
             carry = c;
-            digits.push(unsafe { core::mem::transmute::<i8, Digit>(d) });
+            digits.push(Digit::from_trit(d));
         }
     }
     if carry != 0 {
-        digits.push(unsafe { core::mem::transmute::<i8, Digit>(carry) });
+        digits.push(Digit::from_trit(carry));
     }
     digits.reverse();
     let first_nonzero = digits.iter().position(|d| *d != Digit::Zero);
     match first_nonzero {
-        None => { digits.truncate(0); digits.push(Digit::Zero); }
+        None => { digits.clear(); digits.push(Digit::Zero); }
         Some(0) => {}
         Some(pos) => { digits.drain(0..pos); }
     }
@@ -209,13 +211,13 @@ impl Add<Digit> for &Ternary {
                 break;
             }
             let (c, r) = balanced_carry(d.to_i8() + carry);
-            // SAFETY: balanced_carry output is in {-1, 0, 1}.
-            *d = unsafe { core::mem::transmute::<i8, Digit>(r) };
+            // Range: balanced_carry output is in {-1, 0, 1}.
+            *d = Digit::from_trit(r);
             carry = c;
         }
         if carry != 0 {
-            // SAFETY: balanced_carry carry is in {-1, 0, 1}.
-            digits.insert(0, unsafe { core::mem::transmute::<i8, Digit>(carry) });
+            // Range: balanced_carry carry is in {-1, 0, 1}.
+            digits.insert(0, Digit::from_trit(carry));
         }
         Ternary::new(digits)
     }
@@ -298,7 +300,7 @@ impl Mul<&Ternary> for &Ternary {
 
         // Rebalance position 0 — may produce one extra carry digit.
         let v0 = acc[0];
-        let extra = if v0 < -1 || v0 > 1 {
+        let extra = if !(-1..=1).contains(&v0) {
             let mut rem = v0 % 3;
             let mut carry = v0 / 3;
             if rem > 1 { rem -= 3; carry += 1; }
@@ -309,25 +311,15 @@ impl Mul<&Ternary> for &Ternary {
             None
         };
 
-        // Build result. Since Digit is #[repr(i8)] with Neg=-1, Zero=0,
-        // Pos=1 and all rebalanced values are in {-1,0,1}, we transmute
-        // each i8 directly to Digit — no match/branch per element.
-        #[inline(always)]
-        fn i8_to_digit(v: i8) -> Digit {
-            debug_assert!(
-                v >= -1 && v <= 1,
-                "balanced_carry rebalancing produced invalid trit value: {v}"
-            );
-            unsafe { core::mem::transmute::<i8, Digit>(v) }
-        }
-
+        // Build result. All rebalanced values are in {-1,0,1}, so each i8
+        // maps directly to Digit — no match/branch per element.
         let first_nz = acc.iter().position(|&v| v != 0);
         match (extra, first_nz) {
             (Some(c), _) => {
                 let mut digits = Vec::with_capacity(1 + rlen);
-                digits.push(i8_to_digit(c));
+                digits.push(Digit::from_trit(c));
                 for &v in acc.iter() {
-                    digits.push(i8_to_digit(v));
+                    digits.push(Digit::from_trit(v));
                 }
                 Ternary::new(digits)
             }
@@ -335,7 +327,7 @@ impl Mul<&Ternary> for &Ternary {
             (None, Some(pos)) => {
                 let mut digits = Vec::with_capacity(rlen - pos);
                 for &v in &acc[pos..] {
-                    digits.push(i8_to_digit(v));
+                    digits.push(Digit::from_trit(v));
                 }
                 Ternary::new(digits)
             }
@@ -382,26 +374,15 @@ impl BitXor<&Ternary> for &Ternary {
 impl Shl<usize> for &Ternary {
     type Output = Ternary;
 
-    /// # Optimization: pre-allocated vec + write_bytes zero-fill
+    /// # Optimization: pre-allocated vec + memset zero-fill
     ///
-    /// Output length = input length + shift amount. Single allocation via
-    /// `with_capacity`, then `extend_from_slice` (memcpy) followed by
-    /// `ptr::write_bytes` (memset) for the trailing zeros.
-    ///
-    /// `ptr::write_bytes` is ~2 ns faster than `extend(repeat(Zero).take(rhs))`
-    /// because it bypasses iterator overhead and emits a direct memset.
+    /// Output length = input length + shift amount. Single zeroed allocation
+    /// (memset), then `copy_from_slice` (memcpy) over the leading digits.
     fn shl(self, rhs: usize) -> Self::Output {
         let slice = self.to_digit_slice();
         let n = slice.len();
-        let mut digits = Vec::with_capacity(n + rhs);
-        digits.extend_from_slice(slice);
-        // SAFETY: Digit is #[repr(i8)] with Zero=0; 0-byte fill produces
-        // valid Digit::Zero values. Capacity covers n+rhs; we initialise
-        // the n..n+rhs range before calling set_len.
-        unsafe {
-            core::ptr::write_bytes(digits.as_mut_ptr().add(n), 0u8, rhs);
-            digits.set_len(n + rhs);
-        }
+        let mut digits = vec![Digit::Zero; n.strict_add(rhs)];
+        digits[..n].copy_from_slice(slice);
         Ternary::new(digits)
     }
 }

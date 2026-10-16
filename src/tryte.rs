@@ -3,7 +3,7 @@ use crate::{
     Digit::{Neg, Pos, Zero},
     Ternary,
 };
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 // ---------------------------------------------------------------------------
@@ -22,7 +22,7 @@ const fn trit5_entry_i64(v: u8) -> (u8, [i8; 5]) {
     let mut t = [0i8; 5];
     let mut i = 0usize;
     while i < 5 {
-        let r = ((n % 3) + 3) % 3; // Rust % is truncating, so normalise to 0..2
+        let r = n.rem_euclid(3); // Rust % is truncating; rem_euclid gives 0..2
         t[i] = if r == 2 { -1i8 } else { r as i8 };
         n = (n - t[i] as i16) / 3;
         i += 1;
@@ -217,9 +217,9 @@ impl<const SIZE: usize> Tryte<SIZE> {
             // q is LSB-first: q[0]=trit at pos+4, q[4]=trit at pos.
             let mut j = 0usize;
             while j < 5 {
-                // SAFETY: q[j] ∈ {-1, 0, 1}; negating preserves this.
+                // Range: q[j] ∈ {-1, 0, 1}; negating preserves this.
                 let t = if negative { -q[j] } else { q[j] };
-                raw[pos + 4 - j] = unsafe { core::mem::transmute::<i8, Digit>(t) };
+                raw[pos + 4 - j] = Digit::from_trit(t);
                 j += 1;
             }
         }
@@ -236,8 +236,8 @@ impl<const SIZE: usize> Tryte<SIZE> {
             carry = c;
             let t = if negative { -trit } else { trit };
             pos -= 1;
-            // SAFETY: t ∈ {-1, 0, 1}.
-            raw[pos] = unsafe { core::mem::transmute::<i8, Digit>(t) };
+            // Range: t ∈ {-1, 0, 1}.
+            raw[pos] = Digit::from_trit(t);
         }
 
         Self::new(raw)
@@ -472,31 +472,6 @@ impl<const SIZE: usize> Tryte<SIZE> {
         let max = Self::max_i64();
         if result > max { Self::MAX } else if result < -max { Self::MIN } else { Self::from_i64(result) }
     }
-
-    /// Returns the trit string representation as a newly allocated `String`.
-    ///
-    /// # Optimization: pre-allocated buffer, direct unsafe write
-    ///
-    /// `Display` already builds on a stack `[u8; SIZE]` buffer, but the
-    /// trait `to_string()` route wraps it in `fmt::format` which starts with
-    /// a zero-capacity `String` and reallocates on `write_str`.  This inherent
-    /// method pre-allocates `SIZE` bytes and writes directly — one allocation,
-    /// no realloc.
-    #[inline]
-    pub fn to_string(&self) -> alloc::string::String {
-        let mut s = alloc::string::String::with_capacity(SIZE);
-        // SAFETY: '+', '0', '-' are all ASCII (valid single-byte UTF-8).
-        unsafe {
-            let buf = s.as_mut_vec();
-            let ptr = buf.as_mut_ptr();
-            for (i, d) in self.raw.iter().enumerate() {
-                ptr.add(i).write(d.to_byte());
-            }
-            buf.set_len(SIZE);
-        }
-        s
-    }
-
 }
 
 impl<const SIZE: usize> DigitOperate for Tryte<SIZE> {
@@ -549,8 +524,8 @@ impl<const SIZE: usize> DigitOperate for Tryte<SIZE> {
     /// converted back (1 alloc). Now operates in-place on the fixed stack array.
     fn each_zip(&self, f: impl Fn(Digit, Digit) -> Digit, other: Self) -> Self {
         let mut raw = self.raw;
-        for i in 0..SIZE {
-            raw[i] = f(self.raw[i], other.raw[i]);
+        for (d, &o) in raw.iter_mut().zip(&other.raw) {
+            *d = f(*d, o);
         }
         Self::new(raw)
     }
@@ -589,8 +564,8 @@ impl<const SIZE: usize> Display for Tryte<SIZE> {
         for (i, d) in self.raw.iter().enumerate() {
             buf[i] = d.to_char() as u8;
         }
-        // SAFETY: '+', '-', '0' are all valid single-byte UTF-8.
-        f.write_str(unsafe { core::str::from_utf8_unchecked(&buf) })
+        // '+', '-', '0' are ASCII; validation never fails
+        f.write_str(core::str::from_utf8(&buf).map_err(|_| core::fmt::Error)?)
     }
 }
 
@@ -782,7 +757,7 @@ impl<const SIZE: usize> FromStr for Tryte<SIZE> {
     /// # Optimization: direct parse into stack array — zero heap allocation.
     ///
     /// The previous implementation called `Ternary::from_str` (validates bytes
-    /// + allocates a `Vec<Digit>`) then `Tryte::from_ternary` (copies into the
+    /// and allocates a `Vec<Digit>`) then `Tryte::from_ternary` (copies into the
     /// fixed array and drops the Vec). The heap round-trip cost ~4.5 ns.
     ///
     /// We now parse directly: validate each byte as we go, map to Digit, and

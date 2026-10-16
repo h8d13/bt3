@@ -66,7 +66,7 @@ pub trait DigitOperate {
     /// ### Arguments
     ///
     /// * `f` - A closure or function that takes a `Digit` and an additional `Digit`,
-    ///         and returns a transformed `Digit`.
+    ///   and returns a transformed `Digit`.
     /// * `other` - An additional `Digit` to be passed to the transformation function `f`.
     ///
     /// ### Returns

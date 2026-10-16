@@ -1,5 +1,7 @@
 use crate::concepts::DigitOperate;
 use crate::{Digit, Ternary};
+#[cfg(test)]
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::fmt::Display;
 use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Shl, Shr, Sub};
@@ -20,15 +22,15 @@ const fn expand_digits_compute(val: i8) -> [Digit; 5] {
             buf[i] = Digit::Neg;
             unsigned += 1;
         } else {
-            // SAFETY: rem ∈ {0, 1} ⊂ {-1, 0, 1}.
-            buf[i] = unsafe { core::mem::transmute::<i8, Digit>(rem as i8) };
+            // Range: rem ∈ {0, 1} ⊂ {-1, 0, 1}.
+            buf[i] = Digit::from_trit(rem as i8);
         }
     }
     if negative {
         let mut j = 0usize;
         while j < 5 {
-            // SAFETY: negating a valid Digit i8 value yields another valid Digit value.
-            buf[j] = unsafe { core::mem::transmute::<i8, Digit>(-(buf[j] as i8)) };
+            // Range: negating a valid Digit i8 value yields another valid Digit value.
+            buf[j] = Digit::from_trit(-(buf[j] as i8));
             j += 1;
         }
     }
@@ -229,10 +231,7 @@ impl TritsChunk {
     /// ```
     pub fn from_ternary(ternary: Ternary) -> Self {
         if ternary.log() > 5 {
-            panic!(
-                "TritsChunk::from_ternary(): Ternary is too long: {}",
-                ternary.to_string()
-            );
+            panic!("TritsChunk::from_ternary(): Ternary is too long: {ternary}");
         }
         Self(ternary.to_dec() as i8)
     }
@@ -286,7 +285,7 @@ impl DataTernary {
         let len = ternary.log();
         let partial = len % 5; // digits in the leading partial chunk (0 = full)
         let slice = ternary.to_digit_slice();
-        let num_chunks = (len + 4) / 5;
+        let num_chunks = len.div_ceil(5);
 
         const WEIGHTS: [i8; 5] = [81, 27, 9, 3, 1]; // used only for partial leading chunk
 
@@ -312,7 +311,7 @@ impl DataTernary {
         // as ×3 (one LEA instruction each on x86), vs explicit constants 81/27/9/3
         // which require costlier IMUL or strength-reduction sequences.
         let tail = &slice[start..];
-        for c in tail.chunks_exact(5) {
+        for c in tail.as_chunks::<5>().0 {
             // val = ((((c[0]*3 + c[1])*3 + c[2])*3 + c[3])*3 + c[4])
             // SAFETY: val ∈ [-121, 121] since each trit ∈ {-1,0,1} and max = 121.
             let val = (((c[0].to_i8() * 3 + c[1].to_i8()) * 3
@@ -369,7 +368,7 @@ impl DataTernary {
         // `Ternary::new(digits).trim()` would incur.
         let first_nz = digits.iter().position(|d| *d != Digit::Zero);
         match first_nz {
-            None => { digits.truncate(0); digits.push(Digit::Zero); }
+            None => { digits.clear(); digits.push(Digit::Zero); }
             Some(0) => {}
             Some(pos) => { digits.drain(0..pos); }
         }
@@ -707,6 +706,7 @@ const fn il40_or(a: u128, b: u128) -> u128 {
 /// The result l-bit (marks Zero=1, Neg/Pos=0) equals `la | lb`:
 /// - If la=1 (a=Zero) or lb=1 (b=Zero): result is always Zero → l=1.
 /// - If la=lb=0 (both non-Zero): result is Pos (new_h=1) or Neg (new_h=0) → l=0.
+///
 /// This eliminates `is_neg` and `MASK_L40 & !new_h & !is_neg` (6 u128 ops fewer).
 #[inline(always)]
 const fn il40_xor(a: u128, b: u128) -> u128 {
@@ -797,21 +797,21 @@ impl Ter40 {
         if self.0 == 0 { return raw; }
         let negative = self.0 < 0;
         let mut x = self.0.unsigned_abs();
-        // SAFETY: trit ∈ {-1, 0, 1} in both branches.
+        // Range: trit ∈ {-1, 0, 1} in both branches.
         if !negative {
             for i in (0..40).rev() {
                 let rem = (x % 3) as u8;
-                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                raw[i] = Digit::from_trit(
                     if rem == 2 { -1i8 } else { rem as i8 }
-                )};
+                );
                 x = (x - rem as u64) / 3 + (rem == 2) as u64;
             }
         } else {
             for i in (0..40).rev() {
                 let rem = (x % 3) as u8;
-                raw[i] = unsafe { core::mem::transmute::<i8, Digit>(
+                raw[i] = Digit::from_trit(
                     if rem == 2 { 1i8 } else { -(rem as i8) }
-                )};
+                );
                 x = (x - rem as u64) / 3 + (rem == 2) as u64;
             }
         }
@@ -1346,7 +1346,7 @@ impl BctTer32 {
     #[inline] pub fn from_dec(v: i64) -> Self {
         // # Optimization: encode via IL then compact to split (pos, neg).
         // IlBctTer32::from_dec uses UTER5_LUT (7 groups, no serial divmod).
-        // to_bct() is O(1) PEXT — replacing the two O(32) divmod loops.
+        // to_bct() is an O(1) Morton compact — replacing the two O(32) divmod loops.
         IlBctTer32::from_dec(v).to_bct()
     }
 
@@ -1360,7 +1360,7 @@ impl BctTer32 {
     /// ```
     #[inline] pub fn to_dec(&self) -> i64 {
         // # Optimization: spread to IL then use Jones parallel reduction.
-        // IlBctTer32::from_bct is O(1) PDEP; IlBctTer32::to_dec is a 5-stage
+        // IlBctTer32::from_bct is an O(1) LUT spread; IlBctTer32::to_dec is a 5-stage
         // log-depth fold — replacing the O(32) serial Horner dependency chain.
         IlBctTer32::from_bct(*self).to_dec()
     }
@@ -1906,7 +1906,6 @@ const MASK_H: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 /// `SPREAD_BYTE_LUT[b]` = bit `i` of `b` placed at position `2*i` of the result.
 /// Four lookups + ORs replace the 5-step serial Morton chain in `spread_u32`,
 /// breaking the sequential data dependency and enabling ILP.
-#[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
 const SPREAD_BYTE_LUT: [u16; 256] = {
     let mut lut = [0u16; 256];
     let mut b = 0usize;
@@ -1927,46 +1926,29 @@ const SPREAD_BYTE_LUT: [u16; 256] = {
 
 /// Spread the 32 bits of `x` to the even-indexed bit positions (0,2,4,...,62) of a u64.
 ///
-/// On x86-64 with BMI2, this compiles to a single `PDEP` instruction.
-/// Otherwise splits `x` into 4 bytes and uses `SPREAD_BYTE_LUT` for each —
+/// Splits `x` into 4 bytes and uses `SPREAD_BYTE_LUT` for each —
 /// four independent loads (vs. the 5-step serial Morton chain) exploit ILP.
 /// The inverse is `compact_u64`.
 #[inline(always)]
 fn spread_u32(x: u32) -> u64 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
-    // SAFETY: bmi2 is verified at compile time via target_feature.
-    return unsafe { core::arch::x86_64::_pdep_u64(x as u64, 0x5555_5555_5555_5555) };
-
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
-    {
-          SPREAD_BYTE_LUT[(x        & 0xFF) as usize] as u64
-        | (SPREAD_BYTE_LUT[((x >>  8) & 0xFF) as usize] as u64) << 16
-        | (SPREAD_BYTE_LUT[((x >> 16) & 0xFF) as usize] as u64) << 32
-        | (SPREAD_BYTE_LUT[ (x >> 24)         as usize] as u64) << 48
-    }
+      SPREAD_BYTE_LUT[(x        & 0xFF) as usize] as u64
+    | (SPREAD_BYTE_LUT[((x >>  8) & 0xFF) as usize] as u64) << 16
+    | (SPREAD_BYTE_LUT[((x >> 16) & 0xFF) as usize] as u64) << 32
+    | (SPREAD_BYTE_LUT[ (x >> 24)         as usize] as u64) << 48
 }
 
 /// Compact the even-indexed bits (0,2,4,...,62) of `x` into a u32.
 ///
-/// On x86-64 with BMI2, this compiles to a single `PEXT` instruction.
-/// Otherwise falls back to the standard 6-step Morton code compact.
-/// Inverse of `spread_u32`.
+/// Standard 6-step Morton code compact. Inverse of `spread_u32`.
 #[inline(always)]
 fn compact_u64(x: u64) -> u32 {
-    #[cfg(all(target_arch = "x86_64", target_feature = "bmi2"))]
-    // SAFETY: bmi2 is verified at compile time via target_feature.
-    return unsafe { core::arch::x86_64::_pext_u64(x, 0x5555_5555_5555_5555) as u32 };
-
-    #[cfg(not(all(target_arch = "x86_64", target_feature = "bmi2")))]
-    {
-        let mut x = x & 0x5555_5555_5555_5555;
-        x = (x | (x >>  1)) & 0x3333_3333_3333_3333;
-        x = (x | (x >>  2)) & 0x0F0F_0F0F_0F0F_0F0F;
-        x = (x | (x >>  4)) & 0x00FF_00FF_00FF_00FF;
-        x = (x | (x >>  8)) & 0x0000_FFFF_0000_FFFF;
-        x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-        x as u32
-    }
+    let mut x = x & 0x5555_5555_5555_5555;
+    x = (x | (x >>  1)) & 0x3333_3333_3333_3333;
+    x = (x | (x >>  2)) & 0x0F0F_0F0F_0F0F_0F0F;
+    x = (x | (x >>  4)) & 0x00FF_00FF_00FF_00FF;
+    x = (x | (x >>  8)) & 0x0000_FFFF_0000_FFFF;
+    x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
+    x as u32
 }
 
 /// 32 balanced ternary trits packed into a **single `u64`** using 2 bits per trit.

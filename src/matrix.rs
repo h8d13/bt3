@@ -27,7 +27,7 @@ use crate::store::BctTer64;
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 #[inline(always)]
-fn words_for(n: usize) -> usize { (n + 63) / 64 }
+fn words_for(n: usize) -> usize { n.div_ceil(64) }
 
 #[inline(always)]
 fn word_set(w: BctTer64, b: u32, v: i8) -> BctTer64 {
@@ -198,13 +198,9 @@ impl TernaryMatrix {
         assert_eq!(out.len(), self.rows, "matvec: output length must match matrix rows");
         let xw = &x.words;
         let stride = self.row_stride;
-        for r in 0..self.rows {
-            let base = r * stride;
-            let mut acc = 0i32;
-            for w in 0..stride {
-                acc += self.data[base + w].bct_dot_word(xw[w]);
-            }
-            out[r] = acc;
+        for (r, o) in out.iter_mut().enumerate() {
+            let row = &self.data[r * stride..(r + 1) * stride];
+            *o = row.iter().zip(xw).map(|(w, &xv)| w.bct_dot_word(xv)).sum();
         }
     }
 
@@ -248,7 +244,7 @@ impl TernaryMatrix {
         assert_eq!(x.len(), self.cols, "matvec_i8: vector length must match matrix columns");
         assert_eq!(out.len(), self.rows, "matvec_i8: output length must match matrix rows");
         let stride = self.row_stride;
-        for r in 0..self.rows {
+        for (r, o) in out.iter_mut().enumerate() {
             let row = &self.data[r * stride..(r + 1) * stride];
             let mut acc = 0i32;
             // last chunk may be short: trits past `cols` are never set, and
@@ -260,7 +256,7 @@ impl TernaryMatrix {
                     acc += t * xi as i32;
                 }
             }
-            out[r] = acc;
+            *o = acc;
         }
     }
 

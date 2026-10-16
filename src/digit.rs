@@ -187,7 +187,7 @@ impl Digit {
     #[inline]
     pub const fn to_byte(self) -> u8 {
         // Neg=-1 → index 0 → b'-'=45, Zero=0 → index 1 → b'0'=48, Pos=1 → index 2 → b'+'=43
-        const BYTES: [u8; 3] = [b'-', b'0', b'+'];
+        const BYTES: [u8; 3] = *b"-0+";
         BYTES[(self as i8 + 1) as usize]
     }
 
@@ -239,6 +239,19 @@ impl Digit {
             1 => Digit::Pos,
             _ => panic!("Invalid value. A Ternary must be either -1, 0 or +1."),
         }
+    }
+
+    /// Branch-free `from_i8` for values already known to be in `{-1, 0, 1}`.
+    ///
+    /// Sole `i8 → Digit` reinterpret in the crate. A safe `match` here costs
+    /// a cmp/cmov chain per call: LLVM loses the `{-1, 0, 1}` range through
+    /// arithmetic like `-x` or `a * b`. Callers must uphold the range;
+    /// debug builds check it.
+    #[inline(always)]
+    pub(crate) const fn from_trit(v: i8) -> Digit {
+        debug_assert!(v >= -1 && v <= 1, "trit out of range");
+        // SAFETY: Digit is #[repr(i8)] with discriminants {-1, 0, 1}.
+        unsafe { core::mem::transmute::<i8, Digit>(v) }
     }
 
     /// Returns the corresponding possible value of the current `Digit`.
@@ -435,8 +448,8 @@ impl Digit {
     /// assert_eq!(Pos.k3_equiv(Pos), Pos);   // both true → true
     /// ```
     pub const fn k3_equiv(self, other: Self) -> Self {
-        // SAFETY: product of {-1,0,1} stays in {-1,0,1}.
-        unsafe { core::mem::transmute::<i8, Digit>(self.to_i8() * other.to_i8()) }
+        // Range: product of {-1,0,1} stays in {-1,0,1}.
+        Digit::from_trit(self.to_i8() * other.to_i8())
     }
 
     /// Performs a ternary AND operation for the current `Digit` and another `Digit`.
@@ -635,8 +648,8 @@ impl Digit {
     #[inline]
     pub const fn post(self) -> Self {
         let v = self as i8 + 1; // {0, 1, 2}
-        // SAFETY: v - 3*(v>>1) ∈ {0,1,-1} = valid Digit discriminants.
-        unsafe { core::mem::transmute::<i8, Digit>(v - 3 * (v >> 1)) }
+        // Range: v - 3*(v>>1) ∈ {0,1,-1} = valid Digit discriminants.
+        Digit::from_trit(v - 3 * (v >> 1))
     }
 
     /// Performs the inverse operation from the Post's negation of the current `Digit`.
@@ -655,8 +668,8 @@ impl Digit {
     #[inline]
     pub const fn pre(self) -> Self {
         let d = self as i8;
-        // SAFETY: d + 2 - 3*((d>>7)+1) ∈ {1,-1,0} = valid Digit discriminants.
-        unsafe { core::mem::transmute::<i8, Digit>(d + 2 - 3 * ((d >> 7) + 1)) }
+        // Range: d + 2 - 3*((d>>7)+1) ∈ {1,-1,0} = valid Digit discriminants.
+        Digit::from_trit(d + 2 - 3 * ((d >> 7) + 1))
     }
 
     /// This method maps this `Digit` value to its corresponding unbalanced ternary
@@ -722,14 +735,14 @@ impl Digit {
     /// Branchless: `a · (a == b)`.
     /// When equal: `a * 1 = a`. When unequal: `a * 0 = 0`.
     ///
-    /// Uses transmute instead of `from_i8` to avoid its `_ => panic!` arm.
-    /// SAFETY: a·(a==b) for a,b ∈ {−1,0,1} yields a value in {−1,0,1}.
+    /// Uses `from_trit` instead of `from_i8` to avoid its `_ => panic!` arm.
+    /// Range: a·(a==b) for a,b ∈ {−1,0,1} yields a value in {−1,0,1}.
     pub const fn consensus(self, other: Self) -> Self {
         let a = self.to_i8();
         let b = other.to_i8();
         let v = a * ((a == b) as i8);
-        // SAFETY: v ∈ {-1, 0, 1} — either a*1=a or a*0=0, both in {-1,0,1}.
-        unsafe { core::mem::transmute::<i8, Digit>(v) }
+        // Range: v ∈ {-1, 0, 1} — either a*1=a or a*0=0, both in {-1,0,1}.
+        Digit::from_trit(v)
     }
 
     /// Tritwise **accept-anything** (ANY): the non-zero trit wins; conflicting non-zero trits → `Zero`.
@@ -768,14 +781,14 @@ impl Digit {
     /// - Both equal → their shared sign (±1 + ±1 = ±2, sign = ±1).
     ///
     /// Eliminates the 5-arm match entirely.
-    /// SAFETY: sign(a+b) for a,b ∈ {−1,0,1} is in {−1,0,1}.
+    /// Range: sign(a+b) for a,b ∈ {−1,0,1} is in {−1,0,1}.
     pub const fn accept_anything(self, other: Self) -> Self {
         let s = self.to_i8() + other.to_i8();
         // Branchless signum: same pattern as `parse` / `post` / `pre`.
         // LLVM emits PCMPGTB×2 + PSUBB when vectorising over a digit slice.
         let v = (s > 0) as i8 - (s < 0) as i8;
-        // SAFETY: signum of sum of {-1,0,1} is in {-1,0,1}.
-        unsafe { core::mem::transmute::<i8, Digit>(v) }
+        // Range: signum of sum of {-1,0,1} is in {-1,0,1}.
+        Digit::from_trit(v)
     }
 
     /// Decoder: returns `Pos` if `self == Neg`, otherwise `Neg`.
@@ -840,8 +853,8 @@ impl Digit {
         let v = self as i8;
         // Arithmetic right shift: -1→-1, 0→0, 1→0. min(v, 0).
         // LLVM emits PSARB for SIMD vectorisation in `each(clamp_down)`.
-        // SAFETY: v>>7 for v∈{-1,0,1} yields {-1,0,0} ⊂ valid Digit discriminants.
-        unsafe { core::mem::transmute::<i8, Digit>(v >> 7) }
+        // Range: v>>7 for v∈{-1,0,1} yields {-1,0,0} ⊂ valid Digit discriminants.
+        Digit::from_trit(v >> 7)
     }
 
     /// Clamp toward positive: `max(self, Zero)`.
@@ -860,8 +873,8 @@ impl Digit {
         let v = self as i8;
         // -((-v) >> 7): negate to flip sign, shift to isolate, negate back. max(v, 0).
         // LLVM emits PSARB for SIMD vectorisation in `each(clamp_up)`.
-        // SAFETY: -((-v)>>7) for v∈{-1,0,1} yields {0,0,1} ⊂ valid Digit discriminants.
-        unsafe { core::mem::transmute::<i8, Digit>(-((-v) >> 7)) }
+        // Range: -((-v)>>7) for v∈{-1,0,1} yields {0,0,1} ⊂ valid Digit discriminants.
+        Digit::from_trit(-((-v) >> 7))
     }
 
     /// Ternary equality: returns `Pos` if `self == other`, `Neg` otherwise.
@@ -933,15 +946,15 @@ impl Neg for Digit {
     /// - `Digit::Pos` becomes `Digit::Neg`
     /// - `Digit::Zero` remains `Digit::Zero`
     ///
-    /// # Optimization: zero-cost transmute
+    /// # Optimization: zero-cost `from_trit`
     ///
     /// With `#[repr(i8)]` discriminants, negation is a single `neg` instruction.
-    /// Uses transmute instead of `from_i8` to avoid the `_ => panic!` arm.
-    /// SAFETY: −a for a ∈ {−1, 0, 1} is always in {−1, 0, 1}.
+    /// Uses `from_trit` instead of `from_i8` to avoid the `_ => panic!` arm.
+    /// Range: −a for a ∈ {−1, 0, 1} is always in {−1, 0, 1}.
     #[inline]
     fn neg(self) -> Self::Output {
-        // SAFETY: negation of {-1,0,1} stays in {-1,0,1}.
-        unsafe { core::mem::transmute::<i8, Digit>(-self.to_i8()) }
+        // Range: negation of {-1,0,1} stays in {-1,0,1}.
+        Digit::from_trit(-self.to_i8())
     }
 }
 
@@ -962,16 +975,16 @@ impl Add<Digit> for Digit {
     ///
     /// - Panics:
     ///   - This method does not panic under any circumstances.
-    /// # Optimization: inline balanced arithmetic + transmute
+    /// # Optimization: inline balanced arithmetic + `from_trit`
     ///
     /// a + b for a,b ∈ {−1,0,1} gives s ∈ {−2,…,2}. Rebalance by ∓3:
     /// s=2 → −1, s=−2 → 1, else s unchanged — single pass, no match trees.
-    /// SAFETY: rebalanced digit ∈ {−1, 0, 1}.
+    /// Range: rebalanced digit ∈ {−1, 0, 1}.
     fn add(self, other: Digit) -> Self::Output {
         let s = self.to_i8() + other.to_i8();
         let d = if s > 1 { s - 3 } else if s < -1 { s + 3 } else { s };
-        // SAFETY: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
-        unsafe { core::mem::transmute::<i8, Digit>(d) }
+        // Range: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
+        Digit::from_trit(d)
     }
 }
 
@@ -989,8 +1002,8 @@ impl Sub<Digit> for Digit {
     fn sub(self, other: Digit) -> Self::Output {
         let s = self.to_i8() - other.to_i8();
         let d = if s > 1 { s - 3 } else if s < -1 { s + 3 } else { s };
-        // SAFETY: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
-        unsafe { core::mem::transmute::<i8, Digit>(d) }
+        // Range: d ∈ {-1, 0, 1} after balanced rebalancing of s ∈ {-2..=2}.
+        Digit::from_trit(d)
     }
 }
 
@@ -1012,13 +1025,13 @@ impl Mul<Digit> for Digit {
     ///
     /// - Returns:
     ///   - A `Digit` instance representing the result of the multiplication.
-    /// # Optimization: direct i8 multiply + transmute
+    /// # Optimization: direct i8 multiply + `from_trit`
     ///
     /// Jones: mul is just sign-arithmetic. Product of {−1,0,1}² ⊆ {−1,0,1}.
-    /// SAFETY: a·b for a,b ∈ {−1,0,1} is always in {−1,0,1}.
+    /// Range: a·b for a,b ∈ {−1,0,1} is always in {−1,0,1}.
     fn mul(self, other: Digit) -> Self::Output {
-        // SAFETY: product of {-1,0,1} stays in {-1,0,1}.
-        unsafe { core::mem::transmute::<i8, Digit>(self.to_i8() * other.to_i8()) }
+        // Range: product of {-1,0,1} stays in {-1,0,1}.
+        Digit::from_trit(self.to_i8() * other.to_i8())
     }
 }
 
@@ -1151,12 +1164,12 @@ impl BitXor for Digit {
     ///           diff sign → product −1 → negate → +1 (true).
     ///           either zero → product 0 → negate → 0 (unknown).
     ///
-    /// Uses transmute instead of `from_i8` to avoid its `_ => panic!` arm.
-    /// SAFETY: −(a·b) for a,b ∈ {−1,0,1} always yields a value in {−1,0,1}.
+    /// Uses `from_trit` instead of `from_i8` to avoid its `_ => panic!` arm.
+    /// Range: −(a·b) for a,b ∈ {−1,0,1} always yields a value in {−1,0,1}.
     fn bitxor(self, rhs: Self) -> Self::Output {
         let v = -(self.to_i8() * rhs.to_i8());
-        // SAFETY: product of {-1,0,1} is in {-1,0,1}; negation preserves that.
-        unsafe { core::mem::transmute::<i8, Digit>(v) }
+        // Range: product of {-1,0,1} is in {-1,0,1}; negation preserves that.
+        Digit::from_trit(v)
     }
 }
 

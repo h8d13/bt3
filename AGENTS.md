@@ -18,3 +18,6 @@ Before merging new code, ensure that:
 1. Every public function has an accompanying unit test.
 2. `cargo build` and `cargo test` run successfully. These steps mirror the CI defined in `.github/workflows/rust.yml`.
 3. Ideally a benchmark to back up changes (and related impacted defs)
+
+This usually involves: emitting LLVM ASM: `cargo rustc --release --lib --all-features -- --emit asm -C codegen-units=1`
+Comparing count + time/op. Promote or discard...

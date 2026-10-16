@@ -13,7 +13,7 @@
 use crate::Digit;
 
 #[cfg(feature = "ternary-string")]
-use alloc::string::String;
+use alloc::string::{String, ToString};
 
 #[cfg(feature = "ternary-string")]
 use crate::Ternary;

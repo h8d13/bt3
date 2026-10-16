@@ -5,15 +5,22 @@ pub mod concepts;
 
 #[cfg(feature = "ternary-string")]
 use alloc::{format, string::String, vec, vec::Vec};
+#[cfg(all(test, feature = "ternary-string"))]
+use alloc::string::ToString;
 
+#[cfg(feature = "ternary-string")]
 use crate::concepts::DigitOperate;
 #[cfg(feature = "ternary-string")]
 use core::{
-    fmt::{Display, Formatter, Write as FmtWrite},
+    fmt::{Display, Formatter},
     str::FromStr,
     error::Error,
     cmp::Ordering,
 };
+
+/// Heptavintimal (base-27) alphabet: index = unbalanced trybble value 0..26.
+#[cfg(feature = "ternary-string")]
+const HEPT_CHARS: &[u8; 27] = b"0123456789ABCDEFGHKMNPRTVXZ";
 
 #[cfg(feature = "ternary-string")]
 /// Error returned when parsing a string into a [`Ternary`] fails.
@@ -149,12 +156,8 @@ pub fn tryte(from: &str) -> Tryte {
     let n = bytes.len().min(6);
     let mut raw = [Digit::Zero; 6];
     let offset = 6 - n;
-    // SAFETY: (b==b'+') as i8 - (b==b'-') as i8 ∈ {-1, 0, 1} = valid Digit repr.
-    unsafe {
-        let dst = raw.as_mut_ptr() as *mut i8;
-        for (j, &b) in bytes[..n].iter().enumerate() {
-            dst.add(offset + j).write((b == b'+') as i8 - (b == b'-') as i8);
-        }
+    for (j, &b) in bytes[..n].iter().enumerate() {
+        raw[offset + j] = Digit::from_trit((b == b'+') as i8 - (b == b'-') as i8);
     }
     Tryte::new(raw)
 }
@@ -209,10 +212,10 @@ const fn from_dec_trit5_entry(v: u8) -> (u8, [Digit; 5]) {
     let mut i = 0usize;
     while i < 5 {
         // Normalize rem to {0, 1, 2} then map to balanced {0, 1, -1}.
-        let rem = ((rem_n % 3) + 3) % 3;
+        let rem = rem_n.rem_euclid(3);
         let trit: i8 = if rem <= 1 { rem as i8 } else { -1 };
-        // SAFETY: trit ∈ {-1, 0, 1}.
-        digits[i] = unsafe { core::mem::transmute::<i8, Digit>(trit) };
+        // Range: trit ∈ {-1, 0, 1}.
+        digits[i] = Digit::from_trit(trit);
         rem_n = (rem_n - trit as i64) / 3;
         i += 1;
     }
@@ -309,27 +312,19 @@ impl Ternary {
     pub fn parse(str: &str) -> Self {
         // All valid ternary chars ('+', '-', '0') are single-byte ASCII.
         //
-        // # Optimization: branchless byte→Digit + unsafe ptr write
+        // # Optimization: branchless byte→Digit
         //
         // `(b == b'+') as i8 - (b == b'-') as i8` maps:
         //   b'+' (43) → 1-0 = 1  = Digit::Pos
         //   b'-' (45) → 0-1 = -1 = Digit::Neg
         //   any other → 0-0 = 0  = Digit::Zero
         // No branches → LLVM auto-vectorizes the entire loop (SIMD byte compares).
-        // Unsafe write bypasses Vec::push bounds check to expose the pattern.
-        let bytes = str.as_bytes();
-        let n = bytes.len();
-        let mut digits: Vec<Digit> = Vec::with_capacity(n);
-        // SAFETY: Digit is #[repr(i8)] with discriminants {-1, 0, 1}.
-        // The expression yields exactly those values, so every write is valid.
-        // We write all n elements before set_len(n).
-        unsafe {
-            let dst = digits.as_mut_ptr() as *mut i8;
-            for (i, &b) in bytes.iter().enumerate() {
-                dst.add(i).write((b == b'+') as i8 - (b == b'-') as i8);
-            }
-            digits.set_len(n);
-        }
+        // TrustedLen collect: one allocation, no per-push capacity check.
+        let digits: Vec<Digit> = str
+            .as_bytes()
+            .iter()
+            .map(|&b| Digit::from_trit((b == b'+') as i8 - (b == b'-') as i8))
+            .collect();
         Ternary::new(digits)
     }
 
@@ -503,24 +498,11 @@ impl Ternary {
             }
         }
 
-        // Trim leading zeros introduced by fixed 5-digit groups.
-        // # Optimization: cast to i8 for SIMD-friendly scan
-        //
-        // Digit is #[repr(i8)] with Zero=0; the cast is bit-identical and
-        // lets LLVM auto-vectorize the scan instead of iterating Digit enums
-        // one-by-one.
-        let start = {
-            // SAFETY: Digit is #[repr(i8)]; Zero=0 as i8; scratch is valid for 45 elements.
-            let raw: &[i8] = unsafe {
-                core::slice::from_raw_parts(scratch.as_ptr() as *const i8, 45)
-            };
-            let slice = &raw[end..];
-            let mut p = 0usize;
-            while p < slice.len() && slice[p] == 0 { p += 1; }
-            if p < slice.len() { end + p } else { 44 }
-        };
+        // Trim leading zeros introduced by fixed 5-digit groups; keep >= 1 digit.
+        let mut start = end;
+        while start < 44 && scratch[start] == Digit::Zero { start += 1; }
 
-        Ternary::new(scratch[start..45].to_vec())
+        Ternary::new(scratch[start..].to_vec())
     }
 
     /// Converts the balanced ternary number to its unbalanced representation as a string.
@@ -532,7 +514,7 @@ impl Ternary {
     ///
     /// Returns:
     /// * `String` - The unbalanced ternary representation of the number, where each
-    /// digit is one of `0`, `1`, or `2`.
+    ///   digit is one of `0`, `1`, or `2`.
     ///
     /// Example:
     /// ```
@@ -601,26 +583,17 @@ impl Ternary {
     /// # Notes
     ///
     /// This method does not mutate the original `Ternary` object but returns a new representation.
-    /// # Optimization: i8-cast scan for SIMD auto-vectorization
+    /// # Optimization: digit scan instead of `to_dec() == 0`
     ///
-    /// The previous implementation called `self.to_dec() == 0` to detect the
-    /// all-zeros case. That performed O(n) multiplications and power-of-3
-    /// accumulations just to check a condition that is trivially visible from
-    /// the digit array itself.
-    ///
-    /// Iterating over `Digit` enum values prevents LLVM from generating SIMD
-    /// instructions. Casting to `i8` (valid because `Digit` is `#[repr(i8)]`
-    /// with `Zero=0`) exposes a plain integer scan that LLVM can auto-vectorize
-    /// (pcmpeqb/pmovmskb on x86-64).
+    /// Scans the digit array for the first non-zero trit; no O(n)
+    /// power-of-3 accumulation just to detect the all-zeros case.
     pub fn trim(&self) -> Self {
         let n = self.digits.len();
-        // SAFETY: Digit is #[repr(i8)]; Zero=0 as i8. The cast is bit-identical.
-        let raw: &[i8] = unsafe {
-            core::slice::from_raw_parts(self.digits.as_ptr() as *const i8, n)
-        };
-        let mut pos = 0usize;
-        while pos < n && raw[pos] == 0 { pos += 1; }
-        let start = if pos < n { pos } else { n - 1 };
+        let start = self
+            .digits
+            .iter()
+            .position(|&d| d != Digit::Zero)
+            .unwrap_or(n - 1);
         Ternary::new(self.digits[start..].to_vec())
     }
 
@@ -655,28 +628,17 @@ impl Ternary {
     /// let fixed = ternary.with_length(1);
     /// assert_eq!(fixed.to_string(), "+");
     /// ```
-    /// # Optimization: single allocation + write_bytes zero-fill
+    /// # Optimization: single allocation + memset zero-fill
     ///
-    /// The previous implementation allocated a temporary `vec![Zero; diff]`,
-    /// then created an empty `Ternary` and extended it twice (zeroes + digits).
-    /// We now do one `Vec::with_capacity` and fill in order:
-    /// - `ptr::write_bytes` (memset) for the leading zeros — faster than
-    ///   `extend(repeat(Zero).take(pad))` which goes through iterator machinery.
-    /// - `extend_from_slice` (memcpy) for the existing digits.
+    /// One zeroed allocation (memset), then `copy_from_slice` (memcpy) of
+    /// the existing digits into the tail.
     pub fn with_length(&self, length: usize) -> Self {
         if length <= self.log() {
             return self.clone();
         }
         let pad = length - self.log();
-        let mut digits = Vec::with_capacity(length);
-        // SAFETY: Digit is #[repr(i8)] with Zero=0; 0-byte fill produces
-        // valid Digit::Zero values. Capacity covers `length`; we initialise
-        // the 0..pad range before calling set_len.
-        unsafe {
-            core::ptr::write_bytes(digits.as_mut_ptr(), 0u8, pad);
-            digits.set_len(pad);
-        }
-        digits.extend_from_slice(&self.digits);
+        let mut digits = vec![Digit::Zero; length];
+        digits[pad..].copy_from_slice(&self.digits);
         Ternary::new(digits)
     }
 
@@ -958,20 +920,17 @@ impl Ternary {
     /// assert_eq!(ter("++-").concat(&ter("-++")).to_heptavintimal(), "V8");
     /// ```
     pub fn to_heptavintimal(&self) -> String {
-        const CHARS: &[u8] = b"0123456789ABCDEFGHKMNPRTVXZ";
+        // Balanced trybble to unbalanced 0..26: bias = 13 = 1*9+1*3+1.
+        // A short leading group reads as if zero-padded on the left.
+        let to_char = |g: &[Digit]| {
+            let v = g.iter().fold(0i8, |acc, d| acc * 3 + d.to_i8());
+            HEPT_CHARS[(v + 13) as usize] as char
+        };
         let digits = self.to_digit_slice();
-        let pad = (3 - digits.len() % 3) % 3;
-        let mut out = String::with_capacity((digits.len() + pad) / 3);
-        let mut iter = core::iter::repeat(&Zero).take(pad).chain(digits.iter());
-        loop {
-            let d0 = match iter.next() { Some(d) => d.to_i8(), None => break };
-            let d1 = iter.next().unwrap().to_i8();
-            let d2 = iter.next().unwrap().to_i8();
-            // Convert balanced trybble to unbalanced 0..26: bias = 13 = 1*9+1*3+1
-            let val = (d0 * 9 + d1 * 3 + d2 + 13) as usize;
-            out.push(CHARS[val] as char);
-        }
-        out
+        let (head, body) = digits.split_at(digits.len() % 3);
+        let head = (!head.is_empty()).then_some(head);
+        let groups = body.as_chunks::<3>().0.iter().map(|g| g.as_slice());
+        head.into_iter().chain(groups).map(to_char).collect()
     }
 
     /// Parses a **heptavintimal** (base-27) string into a `Ternary`.
@@ -993,36 +952,26 @@ impl Ternary {
     ///            t.trim().to_string());
     /// ```
     pub fn from_heptavintimal(s: &str) -> Option<Self> {
-        // Map each hept character to its 0..26 value
+        // Map each hept character (either case) to its 0..26 index in the
+        // same table the encoder uses, so the two cannot drift apart.
         let char_val = |c: char| -> Option<i8> {
-            match c {
-                '0'..='9' => Some(c as i8 - '0' as i8),
-                'A'..='H' => Some(c as i8 - 'A' as i8 + 10),
-                'K' => Some(19), 'M' => Some(20), 'N' => Some(21),
-                'P' => Some(22), 'R' => Some(23), 'T' => Some(24),
-                'V' => Some(25), 'X' => Some(26), 'Z' => Some(27 - 1),
-                // Accept lowercase input too
-                'a'..='h' => Some(c as i8 - 'a' as i8 + 10),
-                'k' => Some(19), 'm' => Some(20), 'n' => Some(21),
-                'p' => Some(22), 'r' => Some(23), 't' => Some(24),
-                'v' => Some(25), 'x' => Some(26), 'z' => Some(26),
-                _ => None,
-            }
+            let b = u8::try_from(c.to_ascii_uppercase()).ok()?;
+            HEPT_CHARS.iter().position(|&h| h == b).map(|i| i as i8)
         };
         let mut digits = Vec::with_capacity(s.len() * 3);
         for c in s.chars() {
-            let v = char_val(c)? as i8 - 13; // unbiased: -13..=13
+            let v = char_val(c)? - 13; // unbiased: -13..=13
             // Decompose balanced trybble (v = d0*9 + d1*3 + d2)
-            let r2 = ((v % 3) + 3) % 3;
+            let r2 = v.rem_euclid(3);
             let t2 = if r2 <= 1 { r2 } else { r2 - 3 };
             let v1 = (v - t2) / 3;
-            let r1 = ((v1 % 3) + 3) % 3;
+            let r1 = v1.rem_euclid(3);
             let t1 = if r1 <= 1 { r1 } else { r1 - 3 };
             let t0 = (v1 - t1) / 3;
-            // SAFETY: t0, t1, t2 ∈ {-1, 0, 1}
-            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t0) });
-            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t1) });
-            digits.push(unsafe { core::mem::transmute::<i8, Digit>(t2) });
+            // Range: t0, t1, t2 ∈ {-1, 0, 1}
+            digits.push(Digit::from_trit(t0));
+            digits.push(Digit::from_trit(t1));
+            digits.push(Digit::from_trit(t2));
         }
         Some(Ternary::new(digits).trim())
     }
@@ -1062,34 +1011,6 @@ impl Ternary {
         digits.extend_from_slice(&other.digits);
         Ternary::new(digits)
     }
-
-    /// Converts the balanced ternary number to its canonical string representation.
-    ///
-    /// # Optimization: direct byte writes, bypass `fmt` machinery
-    ///
-    /// `to_string()` via `Display` routes through `fmt::format` which starts
-    /// with `String::new()` (capacity 0) and then reallocates when our
-    /// `write_str` delivers all bytes at once.  This inherent method uses
-    /// `String::with_capacity(n)` for a single right-sized allocation and
-    /// writes bytes directly via the inner `Vec<u8>`, skipping the format
-    /// machinery entirely.  Shadowing the `ToString` auto-impl is valid in
-    /// Rust: inherent methods are preferred in method resolution.
-    #[inline]
-    pub fn to_string(&self) -> alloc::string::String {
-        let n = self.digits.len();
-        let mut s = alloc::string::String::with_capacity(n);
-        // SAFETY: we write exactly `n` valid ASCII bytes and then set_len(n).
-        // `to_byte()` returns one of b'+', b'0', b'-' — all valid UTF-8.
-        let buf = unsafe { s.as_mut_vec() };
-        unsafe {
-            let ptr = buf.as_mut_ptr();
-            for (i, d) in self.digits.iter().enumerate() {
-                ptr.add(i).write(d.to_byte());
-            }
-            buf.set_len(n);
-        }
-        s
-    }
 }
 
 #[cfg(feature = "ternary-string")]
@@ -1102,22 +1023,13 @@ impl DigitOperate for Ternary {
         self.get_digit(index).cloned()
     }
 
-    /// # Optimization: pre-allocated vec + unsafe ptr write
+    /// # Optimization: TrustedLen collect
     ///
-    /// Output length is known upfront (same as input). Single allocation.
-    /// Bypasses `Vec::push` bounds check so LLVM can auto-vectorize when
-    /// `f` compiles to branchless arithmetic (e.g. `post`, `pre`, `not`).
+    /// Output length is known upfront (same as input). Single allocation,
+    /// no per-push capacity check, so LLVM can auto-vectorize when `f`
+    /// compiles to branchless arithmetic (e.g. `post`, `pre`, `not`).
     fn each(&self, f: impl Fn(Digit) -> Digit) -> Self {
-        let n = self.digits.len();
-        let mut out: Vec<Digit> = Vec::with_capacity(n);
-        // SAFETY: we write exactly `n` elements before set_len(n).
-        unsafe {
-            let out_ptr = out.as_mut_ptr();
-            for (i, &d) in self.digits.iter().enumerate() {
-                out_ptr.add(i).write(f(d));
-            }
-            out.set_len(n);
-        }
+        let out: Vec<Digit> = self.digits.iter().map(|&d| f(d)).collect();
         Ternary::new(out)
     }
 
@@ -1200,9 +1112,7 @@ impl DigitOperate for Ternary {
         let (oa, ob) = (len - a.len(), len - b.len());
         // Pre-size the Vec and write directly at each MSB-first index,
         // eliminating the push-then-reverse pass.
-        // SAFETY: Digit is Copy + !Drop; all `len` elements are written below.
-        let mut digits = Vec::with_capacity(len);
-        unsafe { digits.set_len(len); }
+        let mut digits = vec![Zero; len];
         let mut carry = Zero;
         for i in (0..len).rev() {
             let da = if i < oa { Zero } else { a[i - oa] };
@@ -1218,30 +1128,19 @@ impl DigitOperate for Ternary {
 #[cfg(feature = "ternary-string")]
 impl Display for Ternary {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
-        // For typical sizes (≤ 64 trits) write the chars via a stack byte
-        // buffer + single write_str call — avoids a heap `String` allocation
-        // that `to_string_repr` would introduce.
-        const MAX_STACK: usize = 64;
-        let n = self.digits.len();
-        if n <= MAX_STACK {
-            // MaybeUninit avoids zero-initializing the 64-byte buffer.
-            let mut buf = core::mem::MaybeUninit::<[u8; MAX_STACK]>::uninit();
-            let ptr = buf.as_mut_ptr() as *mut u8;
-            for (i, d) in self.digits.iter().enumerate() {
-                // SAFETY: i < n ≤ MAX_STACK; to_byte() returns valid ASCII.
-                unsafe { ptr.add(i).write(d.to_byte()); }
+        // Chars go through a stack byte buffer, one write_str per 64 trits:
+        // no heap allocation, and a single write for typical sizes. Also backs
+        // `to_string()` (ToString blanket impl): one exact-size String alloc.
+        let mut buf = [0u8; 64];
+        for chunk in self.digits.chunks(buf.len()) {
+            for (b, d) in buf.iter_mut().zip(chunk) {
+                *b = d.to_byte();
             }
-            // SAFETY: buf[..n] initialised above; all bytes are valid ASCII.
-            let s = unsafe { core::str::from_utf8_unchecked(
-                core::slice::from_raw_parts(ptr, n)
-            )};
-            f.write_str(s)
-        } else {
-            for d in self.digits.iter() {
-                FmtWrite::write_char(f, d.to_char())?;
-            }
-            Ok(())
+            // to_byte() is always ASCII; validation never fails
+            let s = &buf[..chunk.len()];
+            f.write_str(core::str::from_utf8(s).map_err(|_| core::fmt::Error)?)?;
         }
+        Ok(())
     }
 }
 
@@ -1264,6 +1163,7 @@ impl FromStr for Ternary {
 /// outside the hot code region, keeping `cmp`'s hot equal-length path
 /// compact and consistently cache-line-aligned regardless of surrounding
 /// code changes.
+#[cfg(feature = "ternary-string")]
 #[cold]
 #[inline(never)]
 fn cmp_unequal_len(a: &[Digit], b: &[Digit]) -> Ordering {
@@ -1299,33 +1199,29 @@ impl Ord for Ternary {
     fn cmp(&self, other: &Self) -> Ordering {
         let (a, b) = (&self.digits, &other.digits);
         // Hot path: equal-length operands.
-        // Cast &[Digit] → &[i8] (safe: Digit is repr(i8) with Neg=-1, Zero=0, Pos=1,
-        // so signed byte order matches ternary order). [i8]::cmp is a simple signed
-        // integer loop that LLVM vectorizes with PCMPGTB — much faster than
-        // letting it go through Digit's derived Ord (which generates match arms).
+        // Digit is repr(i8) with Neg=-1, Zero=0, Pos=1, so signed byte order
+        // matches ternary order; compare via to_i8() to stay on plain integers.
         if a.len() == b.len() {
-            // SAFETY: Digit is #[repr(i8)] with Neg=-1, Zero=0, Pos=1;
-            // signed byte ordering matches ternary ordering.
-            let a_i8 = unsafe { core::slice::from_raw_parts(a.as_ptr() as *const i8, a.len()) };
-            let b_i8 = unsafe { core::slice::from_raw_parts(b.as_ptr() as *const i8, b.len()) };
             // Optimistic MST check: the most significant trit often differs → O(1) exit.
-            // SAFETY: Ternary always has at least 1 digit.
-            let (a0, b0) = unsafe { (*a_i8.get_unchecked(0), *b_i8.get_unchecked(0)) };
-            if a0 != b0 {
-                return a0.cmp(&b0);
+            if let (Some(a0), Some(b0)) = (a.first(), b.first())
+                && a0 != b0
+            {
+                return a0.to_i8().cmp(&b0.to_i8());
             }
             // MSTs match: use a vectorizable OR-fold (PXOR+POR) over the whole slice
             // to detect any difference without early exit — LLVM emits SIMD here.
             // Re-checks position 0 (one redundant compare) but the fold is branchless.
-            let diff: i8 = a_i8.iter().zip(b_i8.iter()).fold(0i8, |acc, (x, y)| acc | (x ^ y));
+            let diff = a
+                .iter()
+                .zip(b)
+                .fold(0i8, |acc, (x, y)| acc | (x.to_i8() ^ y.to_i8()));
             if diff == 0 {
                 return Ordering::Equal;
             }
-            // Difference found somewhere after position 0: scalar scan for exact position.
-            for i in 1..a_i8.len() {
-                let (av, bv) = unsafe { (*a_i8.get_unchecked(i), *b_i8.get_unchecked(i)) };
+            // Difference found after position 0 (already equal): scalar scan.
+            for (av, bv) in a.iter().zip(b) {
                 if av != bv {
-                    return av.cmp(&bv);
+                    return av.to_i8().cmp(&bv.to_i8());
                 }
             }
             return Ordering::Equal;
@@ -1651,4 +1547,38 @@ fn test_shr_signed() {
     assert_eq!(ter("+--").shr_signed(0).to_dec(), 5);
     // Multi-trit shift: floor(22/9) = 2
     assert_eq!(ter("+-++").shr_signed(2).to_dec(), 2);
+}
+
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_display_chunk_boundary() {
+    // Display writes through a 64-byte buffer; cover lengths around it.
+    for n in [1, 63, 64, 65, 128, 130] {
+        let s: String = "+-0".chars().cycle().take(n).collect();
+        assert_eq!(Ternary::parse(&s).to_string(), s, "len {n}");
+    }
+}
+
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_heptavintimal_short_head() {
+    // Lengths not divisible by 3 read as zero-padded on the left.
+    for s in ["+", "-+", "+-0+", "-0+-+", "+-0-+0+"] {
+        let t = ter(s);
+        let back = Ternary::from_heptavintimal(&t.to_heptavintimal()).unwrap();
+        assert_eq!(back.to_dec(), t.to_dec(), "{s}");
+    }
+}
+
+#[cfg(feature = "ternary-string")]
+#[test]
+fn test_heptavintimal_alphabet_roundtrip() {
+    // Every symbol, both cases, decodes to the trybble that encodes back to it.
+    for &b in HEPT_CHARS {
+        for c in [b as char, (b as char).to_ascii_lowercase()] {
+            let t = Ternary::from_heptavintimal(&String::from(c)).unwrap();
+            assert_eq!(t.with_length(3).to_heptavintimal(), String::from(b as char));
+        }
+    }
+    assert!(Ternary::from_heptavintimal("I").is_none());
 }
