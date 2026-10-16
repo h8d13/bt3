@@ -66,6 +66,10 @@ Also provides `quant`: bit-exact block codecs for ternary weight formats (`TQ2_0
 and `TernaryMatrix::from_tq2_0` to load them. Scales are returned as raw fp16 bits;
 file parsing (GGUF) stays with the caller.
 
+`Tq2Matrix` keeps TQ2_0 codes as loaded (`t + 1` in 2 bits) for ternary × `i8` products:
+`Σ t·x = Σ code·x − Σ x`, with `Σ x` shared by all rows. `block_dots_i8_into` returns one
+`i32` per (row, block) so the caller can apply per-block scales.
+
 ### `ternary-store`
 
 > Requires `ternary-string`.

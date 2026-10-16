@@ -1028,7 +1028,7 @@ fn bench_terscii() {
 #[test]
 #[cfg(feature = "ternary-matrix")]
 fn bench_matrix() {
-    use balanced_ternary::matrix::{TernaryMatrix, TernaryVec};
+    use balanced_ternary::matrix::{TernaryMatrix, TernaryVec, Tq2Matrix};
 
     println!("\n============================================================");
     println!(" TernaryMatrix / TernaryVec  (BctTer64, AND+POPCNT dot)");
@@ -1119,5 +1119,23 @@ fn bench_matrix() {
     bench("TernaryMatrix from_tq2_0 768×768 (2304 blocks)", ITERS / 1000, || {
         std::hint::black_box(
             TernaryMatrix::from_tq2_0(768, 768, std::hint::black_box(&tq768)));
+    });
+    bench("Tq2Matrix from_tq2_0 768×768 (2304 blocks)", ITERS / 1000, || {
+        std::hint::black_box(
+            Tq2Matrix::from_tq2_0(768, 768, std::hint::black_box(&tq768)));
+    });
+
+    // -- Tq2Matrix i8 kernels (t+1 codes, offset trick) ----------------------
+    println!("\n--- Tq2Matrix matvec_i8 ---");
+
+    let (q768, _) = Tq2Matrix::from_tq2_0(768, 768, &tq768).unwrap();
+    bench("Tq2Matrix matvec_i8_into 768×768 (i8 activations)", ITERS / 1000, || {
+        q768.matvec_i8_into(std::hint::black_box(&xi768), &mut out768);
+        std::hint::black_box(&out768);
+    });
+    let mut blocks768 = vec![0i32; 768 * 3];
+    bench("Tq2Matrix block_dots_i8_into 768×768 (2304 blocks)", ITERS / 1000, || {
+        q768.block_dots_i8_into(std::hint::black_box(&xi768), &mut blocks768);
+        std::hint::black_box(&blocks768);
     });
 }
