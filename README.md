@@ -108,7 +108,7 @@ Choosing the right type for your use case matters:
 
 ## Digit Ops
 
-![Original Image](digit-operations.png)
+![Original Image](./github/digit-operations.png)
 
 ## License
 
