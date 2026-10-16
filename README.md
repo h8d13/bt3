@@ -1,4 +1,4 @@
-[![Rust](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml/badge.svg)](https://github.com/Trehinos/balanced-ternary/actions/workflows/rust.yml)
+[![Rust](https://github.com/h8d13/bt3/actions/workflows/rust.yml/badge.svg)](https://github.com/h8d13/bt3/actions/workflows/rust.yml)
 
 # BT3 BrainTruck3
 
@@ -108,7 +108,7 @@ Choosing the right type for your use case matters:
 
 ## Digit Ops
 
-![Original Image](./github/digit-operations.png)
+![Original Image](./.github/digit-operations.png)
 
 ## License
 
