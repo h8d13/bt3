@@ -1145,4 +1145,14 @@ fn bench_matrix() {
     bench("TernaryMatrix matvec  768×768 (768 rows × 12 words)", ITERS / 1000, || {
         std::hint::black_box(m768.matvec(&x768));
     });
+
+    // -- TernaryMatrix matvec_i8 (ternary weights, i8 activations) -----------
+    println!("\n--- TernaryMatrix matvec_i8 ---");
+
+    let xi768: Vec<i8> = (0..768).map(|i| (i * 37 % 255) as i8).collect();
+    let mut out768 = vec![0i32; 768];
+    bench("TernaryMatrix matvec_i8_into 768×768 (i8 activations)", ITERS / 1000, || {
+        m768.matvec_i8_into(std::hint::black_box(&xi768), &mut out768);
+        std::hint::black_box(&out768);
+    });
 }

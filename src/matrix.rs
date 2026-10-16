@@ -220,4 +220,129 @@ impl TernaryMatrix {
         self.matvec_into(x, &mut out);
         out
     }
+
+    /// Matrix-vector product with `i8` activations, writing into `out`.
+    ///
+    /// Ternary weights against 8-bit activations. Each weight only selects
+    /// `+x`, `-x` or nothing, so the row sum is `Σ x[pos] − Σ x[neg]` with
+    /// no multiplications. Scalar reference; the per-trit loop is kept
+    /// branch-free so it can auto-vectorize.
+    ///
+    /// # Panics
+    /// Panics if `x.len() != self.cols()` or `out.len() != self.rows()`.
+    ///
+    /// # Example
+    /// ```
+    /// use balanced_ternary::matrix::TernaryMatrix;
+    ///
+    /// let mut m = TernaryMatrix::zeros(2, 3);
+    /// m.set(0, 0, 1); m.set(0, 1, -1);
+    /// m.set(1, 1, 1); m.set(1, 2,  1);
+    ///
+    /// let mut out = [0i32; 2];
+    /// m.matvec_i8_into(&[10, 20, -30], &mut out);
+    /// assert_eq!(out, [10 - 20, 20 - 30]);
+    /// ```
+    #[inline]
+    pub fn matvec_i8_into(&self, x: &[i8], out: &mut [i32]) {
+        assert_eq!(x.len(), self.cols, "matvec_i8: vector length must match matrix columns");
+        assert_eq!(out.len(), self.rows, "matvec_i8: output length must match matrix rows");
+        let stride = self.row_stride;
+        for r in 0..self.rows {
+            let row = &self.data[r * stride..(r + 1) * stride];
+            let mut acc = 0i32;
+            // last chunk may be short: trits past `cols` are never set, and
+            // there is no x to read for them
+            for (w, xs) in row.iter().zip(x.chunks(64)) {
+                let (p, n) = (w.pos_mask(), w.neg_mask());
+                for (b, &xi) in xs.iter().enumerate() {
+                    let t = ((p >> b) & 1) as i32 - ((n >> b) & 1) as i32;
+                    acc += t * xi as i32;
+                }
+            }
+            out[r] = acc;
+        }
+    }
+
+    /// Matrix-vector product with `i8` activations → `Vec<i32>`.
+    ///
+    /// Allocates the output on every call; prefer
+    /// [`matvec_i8_into`](Self::matvec_i8_into) in hot paths.
+    ///
+    /// # Panics
+    /// Panics if `x.len() != self.cols()`.
+    pub fn matvec_i8(&self, x: &[i8]) -> Vec<i32> {
+        let mut out = alloc::vec![0i32; self.rows];
+        self.matvec_i8_into(x, &mut out);
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // small LCG: tests stay independent of the getrandom feature
+    fn lcg(s: &mut u64) -> u64 {
+        *s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        *s >> 33
+    }
+
+    fn rand_mat(rows: usize, cols: usize, s: &mut u64) -> TernaryMatrix {
+        let mut m = TernaryMatrix::zeros(rows, cols);
+        for r in 0..rows {
+            for c in 0..cols {
+                m.set(r, c, (lcg(s) % 3) as i8 - 1);
+            }
+        }
+        m
+    }
+
+    // element-wise reference through get(): independent of the word layout
+    fn naive_i8(m: &TernaryMatrix, x: &[i8]) -> Vec<i32> {
+        (0..m.rows())
+            .map(|r| (0..m.cols()).map(|c| m.get(r, c) as i32 * x[c] as i32).sum())
+            .collect()
+    }
+
+    #[test]
+    fn matvec_i8_matches_naive() {
+        let mut s = 0x2545_f491_4f6c_dd1d;
+        // word edges: under, exactly, just past, and several words; 0 cols
+        for &(rows, cols) in &[(1, 1), (3, 63), (4, 64), (5, 65), (7, 200), (2, 768), (3, 0)] {
+            let m = rand_mat(rows, cols, &mut s);
+            let x: Vec<i8> = (0..cols).map(|_| lcg(&mut s) as i8).collect();
+            assert_eq!(m.matvec_i8(&x), naive_i8(&m, &x), "{rows}x{cols}");
+        }
+    }
+
+    #[test]
+    fn matvec_i8_extremes() {
+        // all +1 weights against -128 and all -1 against 127: largest |sum|
+        let cols = 768;
+        let mut pos = TernaryMatrix::zeros(1, cols);
+        let mut neg = TernaryMatrix::zeros(1, cols);
+        for c in 0..cols {
+            pos.set(0, c, 1);
+            neg.set(0, c, -1);
+        }
+        assert_eq!(pos.matvec_i8(&alloc::vec![-128; cols]), [-128 * cols as i32]);
+        assert_eq!(neg.matvec_i8(&alloc::vec![127; cols]), [-127 * cols as i32]);
+    }
+
+    #[test]
+    fn matvec_i8_into_matches_alloc() {
+        let mut s = 7;
+        let m = rand_mat(9, 130, &mut s);
+        let x: Vec<i8> = (0..130).map(|_| lcg(&mut s) as i8).collect();
+        let mut out = alloc::vec![0i32; 9];
+        m.matvec_i8_into(&x, &mut out);
+        assert_eq!(out, m.matvec_i8(&x));
+    }
+
+    #[test]
+    #[should_panic(expected = "matvec_i8: vector length")]
+    fn matvec_i8_rejects_bad_len() {
+        TernaryMatrix::zeros(2, 10).matvec_i8(&[0; 9]);
+    }
 }
