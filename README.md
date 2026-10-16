@@ -62,13 +62,15 @@ Provides `Tryte<N>`: a stack-allocated, `Copy`, fixed-width ternary number of ex
 Provides `TernaryVec` and `TernaryMatrix`: dense ternary linear algebra backed by packed 64-trit BCT words.
 Dot product uses 4 AND + 2 OR + 2 POPCNT per 64-trit word, no multiplications.
 
-Also provides `quant`: bit-exact block codecs for ternary weight formats (`TQ2_0`),
-and `TernaryMatrix::from_tq2_0` to load them. Scales are returned as raw fp16 bits;
-file parsing (GGUF) stays with the caller.
+Also provides `quant`: bit-exact block codecs for ternary weight formats
+(`TQ2_0`: 2 bits per trit, `TQ1_0`: 5 trits per byte), and `TernaryMatrix::from_tq2_0` /
+`from_tq1_0` to load them. Scales are returned as raw fp16 bits; file parsing (GGUF)
+stays with the caller.
 
-`Tq2Matrix` keeps TQ2_0 codes as loaded (`t + 1` in 2 bits) for ternary × `i8` products:
+`Tq2Matrix` keeps TQ2_0 codes (`t + 1` in 2 bits) for ternary × `i8` products:
 `Σ t·x = Σ code·x − Σ x`, with `Σ x` shared by all rows. `block_dots_i8_into` returns one
-`i32` per (row, block) so the caller can apply per-block scales.
+`i32` per (row, block) so the caller can apply per-block scales. `from_tq1_0` repacks to
+TQ2_0 codes once at load, so both formats share the kernels.
 
 ### `ternary-store`
 
@@ -78,7 +80,7 @@ Provides fixed-width storage types optimised for performance and memory:
 
 | Type | Storage | Trits | Range | Notes |
 |------|---------|-------|-------|-------|
-| `TritsChunk` | `i8` | 5 | −121..121 | 5 balanced trits in one byte |
+| `TritsChunk` | `i8` | 5 | −121..121 | 5 balanced trits in one byte; wrapping (mod 3⁵) arithmetic + trit shifts |
 | `DataTernary` | `Vec<TritsChunk>` | variable | arbitrary | 5 trits/byte compact storage |
 | `Ter40` | `i64` | 40 | ±(3⁴⁰−1)/2 | Fastest arithmetic — native i64 ops |
 | `IlTer40` | `u128` | 40 | ±(3⁴⁰−1)/2 | Interleaved BCT; O(1) trit logic on all 40 trits |
@@ -97,6 +99,7 @@ Choosing the right type for your use case matters:
 - **Arbitrary precision / unknown size** → `Ternary` (heap, O(n) ops)
 - **Fixed size, stack-allocated, `Copy`** → `Tryte<N>` (stack, SIMD-vectorizable bitwise)
 - **Compact storage of variable data** → `DataTernary` (5 trits/byte)
+- **5-trit wrapping ALU** → `TritsChunk` (`i8` math, 3–5× faster than `Tryte<5>`)
 - **Fastest arithmetic on ~40-trit values** → `Ter40` (pure i64, no decomposition)
 - **O(1) bitwise over all trits at once** → `IlTer40` or `IlBctTer32`
 - **O(1) arithmetic + logic combined** → `IlBctTer32` / `UTer9` / `UTer27`

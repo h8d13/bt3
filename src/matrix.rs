@@ -22,10 +22,35 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
-use crate::quant::{tq2_0_decode, TQ2_0_BLOCK_BYTES, TQ2_0_BLOCK_TRITS};
+use crate::quant::{
+    tq1_0_decode, tq2_0_decode, tq2_0_encode, BLOCK_TRITS, TQ1_0_BLOCK_BYTES,
+    TQ2_0_BLOCK_BYTES,
+};
 use crate::store::BctTer64;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/// Shared loader body: checks the shape, then runs `decode` on each `N`-byte
+/// block of `data` (row-major) and hands its payload to `put(block_index, _)`.
+///
+/// Returns the raw fp16 scale bits per block, or `None` on the first block
+/// `decode` rejects.
+fn load_blocks<const N: usize, T>(
+    name: &str, rows: usize, cols: usize, data: &[u8],
+    mut decode: impl FnMut(&[u8; N]) -> Option<(T, u16)>,
+    mut put: impl FnMut(usize, T),
+) -> Option<Vec<u16>> {
+    assert!(cols.is_multiple_of(BLOCK_TRITS), "{name}: cols must be a multiple of 256");
+    let blocks = rows * cols / BLOCK_TRITS;
+    assert_eq!(data.len(), blocks * N, "{name}: data length must match rows × cols");
+    let mut scales = Vec::with_capacity(blocks);
+    for (i, block) in data.as_chunks::<N>().0.iter().enumerate() {
+        let (payload, d) = decode(block)?;
+        put(i, payload);
+        scales.push(d);
+    }
+    Some(scales)
+}
 
 #[inline(always)]
 fn words_for(n: usize) -> usize { n.div_ceil(64) }
@@ -183,21 +208,43 @@ impl TernaryMatrix {
     pub fn from_tq2_0(rows: usize, cols: usize, data: &[u8])
         -> Option<(Self, Vec<u16>)>
     {
-        assert!(cols.is_multiple_of(TQ2_0_BLOCK_TRITS),
-                "from_tq2_0: cols must be a multiple of 256");
-        let blocks = rows * cols / TQ2_0_BLOCK_TRITS;
-        assert_eq!(data.len(), blocks * TQ2_0_BLOCK_BYTES,
-                   "from_tq2_0: data length must match rows × cols");
+        Self::from_blocks("from_tq2_0", rows, cols, data, tq2_0_decode)
+    }
+
+    /// Build a `rows × cols` matrix from row-major TQ1_0 blocks.
+    ///
+    /// Same contract as [`from_tq2_0`](Self::from_tq2_0), with 54-byte blocks.
+    /// Every TQ1_0 byte is valid, so this only fails by panicking.
+    ///
+    /// # Panics
+    /// Panics if `cols` is not a multiple of 256, or if `data.len()` is not
+    /// `rows * cols / 256 * 54`.
+    ///
+    /// # Example
+    /// ```
+    /// use balanced_ternary::matrix::TernaryMatrix;
+    /// use balanced_ternary::quant::tq1_0_encode;
+    /// use balanced_ternary::BctTer64;
+    ///
+    /// let block = tq1_0_encode(&[BctTer64::new(0b1, 0b10); 4], 0x3800);
+    /// let (m, scales) = TernaryMatrix::from_tq1_0(1, 256, &block);
+    /// assert_eq!((m.get(0, 0), m.get(0, 1), m.get(0, 2)), (1, -1, 0));
+    /// assert_eq!(scales, [0x3800]);
+    /// ```
+    pub fn from_tq1_0(rows: usize, cols: usize, data: &[u8]) -> (Self, Vec<u16>) {
+        Self::from_blocks("from_tq1_0", rows, cols, data, |b| Some(tq1_0_decode(b)))
+            .expect("TQ1_0 decode cannot fail")
+    }
+
+    fn from_blocks<const N: usize>(
+        name: &str, rows: usize, cols: usize, data: &[u8],
+        decode: impl FnMut(&[u8; N]) -> Option<([BctTer64; 4], u16)>,
+    ) -> Option<(Self, Vec<u16>)> {
         // 256 trits = 4 whole words, so blocks concatenate into rows with
         // no padding: block order is word order
         let mut m = Self::zeros(rows, cols);
-        let mut scales = Vec::with_capacity(blocks);
-        let (chunks, _) = data.as_chunks::<TQ2_0_BLOCK_BYTES>();
-        for (words, block) in m.data.as_chunks_mut::<4>().0.iter_mut().zip(chunks) {
-            let (w, d) = tq2_0_decode(block)?;
-            *words = w;
-            scales.push(d);
-        }
+        let words = m.data.as_chunks_mut::<4>().0;
+        let scales = load_blocks(name, rows, cols, data, decode, |i, w| words[i] = w)?;
         Some((m, scales))
     }
 
@@ -327,7 +374,7 @@ const TQ2_CODES: usize = TQ2_0_BLOCK_BYTES - 2;
 ///
 /// Fits `i32`: |Σ| ≤ 2 · 128 · 256.
 #[inline(always)]
-fn tq2_code_dot(codes: &[u8; TQ2_CODES], x: &[i8; TQ2_0_BLOCK_TRITS]) -> i32 {
+fn tq2_code_dot(codes: &[u8; TQ2_CODES], x: &[i8; BLOCK_TRITS]) -> i32 {
     let mut acc = 0i32;
     for g in 0..2 {
         let bytes = &codes[32 * g..][..32];
@@ -380,22 +427,54 @@ impl Tq2Matrix {
     pub fn from_tq2_0(rows: usize, cols: usize, data: &[u8])
         -> Option<(Self, Vec<u16>)>
     {
-        assert!(cols.is_multiple_of(TQ2_0_BLOCK_TRITS),
-                "from_tq2_0: cols must be a multiple of 256");
-        let blocks = rows * cols / TQ2_0_BLOCK_TRITS;
-        assert_eq!(data.len(), blocks * TQ2_0_BLOCK_BYTES,
-                   "from_tq2_0: data length must match rows × cols");
-        let mut codes = Vec::with_capacity(blocks * TQ2_CODES);
-        let mut scales = Vec::with_capacity(blocks);
-        for block in data.as_chunks::<TQ2_0_BLOCK_BYTES>().0 {
-            let (qs, d) = block.split_at(TQ2_CODES);
+        let decode = |block: &[u8; TQ2_0_BLOCK_BYTES]| {
+            let (qs, d) = block.split_first_chunk::<TQ2_CODES>().unwrap();
             // a code 11 would read as +2 in the kernels
             if qs.iter().any(|&b| b & (b >> 1) & 0x55 != 0) {
                 return None;
             }
-            codes.extend_from_slice(qs);
-            scales.push(u16::from_le_bytes([d[0], d[1]]));
-        }
+            Some((*qs, u16::from_le_bytes([d[0], d[1]])))
+        };
+        Self::from_blocks("from_tq2_0", rows, cols, data, decode)
+    }
+
+    /// Build a `rows × cols` matrix from row-major TQ1_0 blocks, repacked to
+    /// TQ2_0 codes once at load so the `i8` kernels stay the same.
+    ///
+    /// Same contract as [`from_tq2_0`](Self::from_tq2_0), with 54-byte blocks.
+    /// Every TQ1_0 byte is valid, so this only fails by panicking.
+    ///
+    /// # Panics
+    /// Panics if `cols` is not a multiple of 256, or if `data.len()` is not
+    /// `rows * cols / 256 * 54`.
+    ///
+    /// # Example
+    /// ```
+    /// use balanced_ternary::matrix::Tq2Matrix;
+    /// use balanced_ternary::quant::tq1_0_encode;
+    /// use balanced_ternary::BctTer64;
+    ///
+    /// let block = tq1_0_encode(&[BctTer64::new(0b1, 0b10); 4], 0x3800);
+    /// let (m, scales) = Tq2Matrix::from_tq1_0(1, 256, &block);
+    /// assert_eq!((m.get(0, 0), m.get(0, 1), m.get(0, 2)), (1, -1, 0));
+    /// assert_eq!(scales, [0x3800]);
+    /// ```
+    pub fn from_tq1_0(rows: usize, cols: usize, data: &[u8]) -> (Self, Vec<u16>) {
+        let decode = |block: &[u8; TQ1_0_BLOCK_BYTES]| {
+            let (words, d) = tq1_0_decode(block);
+            Some((*tq2_0_encode(&words, d).first_chunk::<TQ2_CODES>().unwrap(), d))
+        };
+        Self::from_blocks("from_tq1_0", rows, cols, data, decode)
+            .expect("TQ1_0 decode cannot fail")
+    }
+
+    fn from_blocks<const N: usize>(
+        name: &str, rows: usize, cols: usize, data: &[u8],
+        decode: impl FnMut(&[u8; N]) -> Option<([u8; TQ2_CODES], u16)>,
+    ) -> Option<(Self, Vec<u16>)> {
+        let mut codes = Vec::with_capacity(rows * cols / 4);
+        let scales = load_blocks(name, rows, cols, data, decode,
+                                 |_, qs: [u8; TQ2_CODES]| codes.extend_from_slice(&qs))?;
         Some((Self { codes, rows, cols }, scales))
     }
 
@@ -413,8 +492,8 @@ impl Tq2Matrix {
     /// Panics if `row >= self.rows()` or `col >= self.cols()`.
     pub fn get(&self, row: usize, col: usize) -> i8 {
         assert!(row < self.rows && col < self.cols, "matrix index out of bounds");
-        let blocks = self.cols / TQ2_0_BLOCK_TRITS;
-        let (b, e) = (col / TQ2_0_BLOCK_TRITS, col % TQ2_0_BLOCK_TRITS);
+        let blocks = self.cols / BLOCK_TRITS;
+        let (b, e) = (col / BLOCK_TRITS, col % BLOCK_TRITS);
         let byte = self.codes[(row * blocks + b) * TQ2_CODES + 32 * (e / 128) + e % 32];
         ((byte >> (2 * ((e / 32) % 4))) & 3) as i8 - 1
     }
@@ -425,9 +504,9 @@ impl Tq2Matrix {
     /// and shared by all rows (offset trick: `Σ t·x = Σ code·x − Σ x`).
     #[inline(always)]
     fn for_each_block_i8(&self, x: &[i8], mut f: impl FnMut(usize, usize, i32)) {
-        let blocks = self.cols / TQ2_0_BLOCK_TRITS;
+        let blocks = self.cols / BLOCK_TRITS;
         let (codes, _) = self.codes.as_chunks::<TQ2_CODES>();
-        for (b, xs) in x.as_chunks::<TQ2_0_BLOCK_TRITS>().0.iter().enumerate() {
+        for (b, xs) in x.as_chunks::<BLOCK_TRITS>().0.iter().enumerate() {
             let xsum: i32 = xs.iter().map(|&v| v as i32).sum();
             for r in 0..self.rows {
                 f(r, b, tq2_code_dot(&codes[r * blocks + b], xs) - xsum);
@@ -460,7 +539,7 @@ impl Tq2Matrix {
     /// assert_eq!(out, [512, -512]);
     /// ```
     pub fn block_dots_i8_into(&self, x: &[i8], out: &mut [i32]) {
-        let blocks = self.cols / TQ2_0_BLOCK_TRITS;
+        let blocks = self.cols / BLOCK_TRITS;
         assert_eq!(x.len(), self.cols,
                    "block_dots_i8: vector length must match matrix columns");
         assert_eq!(out.len(), self.rows * blocks,
@@ -476,8 +555,10 @@ impl Tq2Matrix {
     /// # Panics
     /// Panics if `x.len() != self.cols()` or `out.len() != self.rows()`.
     pub fn matvec_i8_into(&self, x: &[i8], out: &mut [i32]) {
-        assert_eq!(x.len(), self.cols, "matvec_i8: vector length must match matrix columns");
-        assert_eq!(out.len(), self.rows, "matvec_i8: output length must match matrix rows");
+        assert_eq!(x.len(), self.cols,
+                   "matvec_i8: vector length must match matrix columns");
+        assert_eq!(out.len(), self.rows,
+                   "matvec_i8: output length must match matrix rows");
         out.fill(0);
         self.for_each_block_i8(x, |r, _, v| out[r] += v);
     }
@@ -584,7 +665,8 @@ mod tests {
             assert_eq!(scales, (0..blocks).collect::<Vec<_>>(), "{rows}x{cols}");
             for r in 0..rows {
                 for c in 0..cols {
-                    assert_eq!(back.get(r, c), m.get(r, c), "({r}, {c}) of {rows}x{cols}");
+                    assert_eq!(back.get(r, c), m.get(r, c),
+                               "({r}, {c}) of {rows}x{cols}");
                 }
             }
         }
@@ -607,6 +689,62 @@ mod tests {
     #[should_panic(expected = "from_tq2_0: data length")]
     fn from_tq2_0_rejects_bad_len() {
         TernaryMatrix::from_tq2_0(1, 256, &[0; 65]);
+    }
+
+    fn to_tq1_0(m: &TernaryMatrix) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, words) in m.data.as_chunks::<4>().0.iter().enumerate() {
+            out.extend(crate::quant::tq1_0_encode(words, i as u16));
+        }
+        out
+    }
+
+    #[test]
+    fn from_tq1_0_matches_source() {
+        let mut s = 29;
+        for &(rows, cols) in &[(1, 256), (3, 512), (2, 768), (0, 256)] {
+            let m = rand_mat(rows, cols, &mut s);
+            let (back, scales) = TernaryMatrix::from_tq1_0(rows, cols, &to_tq1_0(&m));
+            let blocks = (rows * cols / 256) as u16;
+            assert_eq!(scales, (0..blocks).collect::<Vec<_>>(), "{rows}x{cols}");
+            for r in 0..rows {
+                for c in 0..cols {
+                    assert_eq!(back.get(r, c), m.get(r, c),
+                               "({r}, {c}) of {rows}x{cols}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "from_tq1_0: cols must be a multiple of 256")]
+    fn from_tq1_0_rejects_bad_cols() {
+        TernaryMatrix::from_tq1_0(1, 255, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "from_tq1_0: data length")]
+    fn from_tq1_0_rejects_bad_len() {
+        TernaryMatrix::from_tq1_0(1, 256, &[0; 66]);
+    }
+
+    #[test]
+    fn tq2_from_tq1_0_matches_from_tq2_0() {
+        let mut s = 31;
+        let (rows, cols) = (4, 768);
+        let m = rand_mat(rows, cols, &mut s);
+        let (q2, s2) = Tq2Matrix::from_tq2_0(rows, cols, &to_tq2_0(&m)).unwrap();
+        let (q1, s1) = Tq2Matrix::from_tq1_0(rows, cols, &to_tq1_0(&m));
+        assert_eq!(s1, s2);
+        assert_eq!(q1.codes, q2.codes, "same weights, same TQ2_0 codes");
+        let x: Vec<i8> = (0..cols).map(|_| lcg(&mut s) as i8).collect();
+        assert_eq!(q1.matvec_i8(&x), naive_i8(&m, &x));
+    }
+
+    #[test]
+    #[should_panic(expected = "from_tq1_0: data length")]
+    fn tq2_from_tq1_0_rejects_bad_len() {
+        Tq2Matrix::from_tq1_0(1, 256, &[0; 53]);
     }
 
     // same random weights in both layouts

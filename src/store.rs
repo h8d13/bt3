@@ -235,6 +235,156 @@ impl TritsChunk {
         }
         Self(ternary.to_dec() as i8)
     }
+
+    /// Creates a `TritsChunk` from any `i16`, wrapping modulo `243` (`3^5`)
+    /// into the balanced range `-121..=121`.
+    ///
+    /// Equivalent to keeping the 5 least significant balanced trits, the same
+    /// overflow behavior as `Tryte::<5>::from_i64`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use balanced_ternary::TritsChunk;
+    ///
+    /// assert_eq!(TritsChunk::from_dec_wrapping(122).to_dec(), -121);
+    /// assert_eq!(TritsChunk::from_dec_wrapping(-122).to_dec(), 121);
+    /// assert_eq!(TritsChunk::from_dec_wrapping(243 * 7 + 5).to_dec(), 5);
+    /// ```
+    #[inline]
+    pub const fn from_dec_wrapping(from: i16) -> Self {
+        Self(balance243(from % 243))
+    }
+
+    /// Wrapping addition modulo `243`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use balanced_ternary::TritsChunk;
+    ///
+    /// let a = TritsChunk::from_dec(100);
+    /// assert_eq!(a.wrapping_add(TritsChunk::from_dec(30)).to_dec(), -113);
+    /// ```
+    #[inline]
+    pub const fn wrapping_add(self, rhs: Self) -> Self {
+        // Sum ∈ [-242, 242]: already a residue, only the nudge is needed.
+        Self(balance243(self.0 as i16 + rhs.0 as i16))
+    }
+
+    /// Wrapping subtraction modulo `243`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use balanced_ternary::TritsChunk;
+    ///
+    /// let a = TritsChunk::from_dec(-100);
+    /// assert_eq!(a.wrapping_sub(TritsChunk::from_dec(30)).to_dec(), 113);
+    /// ```
+    #[inline]
+    pub const fn wrapping_sub(self, rhs: Self) -> Self {
+        Self(balance243(self.0 as i16 - rhs.0 as i16))
+    }
+
+    /// Wrapping multiplication modulo `243`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use balanced_ternary::TritsChunk;
+    ///
+    /// let a = TritsChunk::from_dec(50);
+    /// assert_eq!(a.wrapping_mul(TritsChunk::from_dec(5)).to_dec(), 7);
+    /// ```
+    #[inline]
+    pub const fn wrapping_mul(self, rhs: Self) -> Self {
+        // |product| ≤ 121² = 14641: fits i16.
+        Self::from_dec_wrapping(self.0 as i16 * rhs.0 as i16)
+    }
+}
+
+/// Nudges a residue `r ∈ [-242, 242]` into the balanced range `-121..=121`.
+#[inline]
+const fn balance243(r: i16) -> i8 {
+    let b = if r > 121 { r - 243 } else if r < -121 { r + 243 } else { r };
+    b as i8
+}
+
+/// Exact: the balanced range is symmetric, so negation never overflows.
+///
+/// ```
+/// use balanced_ternary::TritsChunk;
+///
+/// assert_eq!((-TritsChunk::from_dec(-121)).to_dec(), 121);
+/// ```
+impl Neg for TritsChunk {
+    type Output = TritsChunk;
+    fn neg(self) -> Self::Output {
+        Self(-self.0)
+    }
+}
+
+/// Trit shift toward the MSB: multiplies by `3^rhs`, dropping trits shifted
+/// out of the 5-trit window (same as `Tryte::<5>` `<<`).
+///
+/// ```
+/// use balanced_ternary::TritsChunk;
+///
+/// let c = TritsChunk::from_dec(14);              // "0+---"
+/// assert_eq!((c << 1usize).to_dec(), 42);        // "+---0"
+/// assert_eq!((c << 3usize).to_dec(), -108);      // "--000", "+-" dropped
+/// assert_eq!((c << 5usize).to_dec(), 0);
+/// ```
+impl Shl<usize> for TritsChunk {
+    type Output = TritsChunk;
+    fn shl(self, rhs: usize) -> Self::Output {
+        // |v · 3^4| ≤ 121 · 81 = 9801: fits i16.
+        #[inline(always)]
+        fn mul_wrap(v: i8, p: i16) -> TritsChunk {
+            TritsChunk::from_dec_wrapping(v as i16 * p)
+        }
+        // One arm per shift, mirroring `Shr`: keeps the factor a constant.
+        match rhs {
+            0 => self,
+            1 => mul_wrap(self.0, 3),
+            2 => mul_wrap(self.0, 9),
+            3 => mul_wrap(self.0, 27),
+            4 => mul_wrap(self.0, 81),
+            _ => Self(0),
+        }
+    }
+}
+
+/// Trit shift toward the LSB: drops the `rhs` lowest trits, i.e. rounds
+/// `self / 3^rhs` to nearest (same as `Tryte::<5>` `>>`).
+///
+/// ```
+/// use balanced_ternary::TritsChunk;
+///
+/// assert_eq!((TritsChunk::from_dec(5) >> 1usize).to_dec(), 2);   // "+--" → "+-"
+/// assert_eq!((TritsChunk::from_dec(-5) >> 1usize).to_dec(), -2); // "-++" → "-+"
+/// assert_eq!((TritsChunk::from_dec(121) >> 5usize).to_dec(), 0);
+/// ```
+impl Shr<usize> for TritsChunk {
+    type Output = TritsChunk;
+    fn shr(self, rhs: usize) -> Self::Output {
+        // 3^rhs is odd so there are no ties; biasing by half then flooring
+        // rounds to nearest, which is exactly dropping the low trits.
+        #[inline(always)]
+        fn round_div(v: i8, p: i16) -> TritsChunk {
+            TritsChunk((v as i16 + p / 2).div_euclid(p) as i8)
+        }
+        // One arm per shift: constant divisors become multiplies, not `idiv`.
+        match rhs {
+            0 => self,
+            1 => round_div(self.0, 3),
+            2 => round_div(self.0, 9),
+            3 => round_div(self.0, 27),
+            4 => round_div(self.0, 81),
+            _ => Self(0),
+        }
+    }
 }
 
 /// Offers a compact structure to store a ternary number.
@@ -455,10 +605,13 @@ impl DataTernary {
         let mut n = from;
         let mut chunks = alloc::vec::Vec::with_capacity(8);
         while n != 0 {
-            let rem = ((n % 243) + 243) % 243;
-            let val: i8 = if rem <= 121 { rem as i8 } else { (rem - 243) as i8 };
-            n = (n - val as i64) / 243;
-            chunks.push(TritsChunk::from_dec(val));
+            // n % 243 ∈ [-242, 242]: one nudge balances it, no double modulo.
+            // The nudge carries ±1 into the quotient; `(n - val) / 243`
+            // would overflow near i64::MIN / i64::MAX.
+            let rem = (n % 243) as i16;
+            let val = balance243(rem);
+            n = n / 243 + ((rem - val as i16) / 243) as i64;
+            chunks.push(TritsChunk(val));
         }
         chunks.reverse(); // built LSB-first, store MSB-first
         Self { chunks }
@@ -503,9 +656,11 @@ impl DataTernary {
     pub fn to_dec(&self) -> i64 {
         // Horner's method: ((c0 * 243 + c1) * 243 + c2) * 243 + ...
         // Chunks are stored MSB-first (chunk[0] is the highest-weight chunk).
+        // Wrapping: near i64::MAX the last `acc * 243` can overshoot before the
+        // negative chunk pulls it back; mod 2^64 the final sum is still exact.
         let mut acc: i64 = 0;
         for chunk in &self.chunks {
-            acc = acc * 243 + chunk.to_dec() as i64;
+            acc = acc.wrapping_mul(243).wrapping_add(chunk.to_dec() as i64);
         }
         acc
     }
@@ -571,7 +726,7 @@ const CHUNK5: [u16; 243] = {
 
 /// 10-bit IL decode table: CHUNK5_DEC[code] = balanced decimal value of 5 trits
 /// encoded in the 10-bit IL `code`.  Invalid 2-bit pairs (0b11) → value 0.
-const CHUNK5_DEC: [i8; 1024] = {
+pub(crate) const CHUNK5_DEC: [i8; 1024] = {
     let mut t = [0i8; 1024];
     let mut k = 0usize;
     while k < 1024 {
@@ -998,6 +1153,60 @@ impl From<Ternary> for Ter40 {
 impl From<Ter40> for Ternary {
     fn from(value: Ter40) -> Self {
         value.to_ternary()
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn trits_chunk_from_dec_wrapping() {
+    // Every i16 must agree with a 5-trit Tryte truncating the same value.
+    for v in i16::MIN..=i16::MAX {
+        let want = crate::Tryte::<5>::from_i64(v as i64).to_i64() as i8;
+        assert_eq!(TritsChunk::from_dec_wrapping(v).to_dec(), want, "v={v}");
+    }
+}
+
+#[cfg(test)]
+fn trits_chunk_all() -> impl Iterator<Item = (TritsChunk, crate::Tryte<5>)> {
+    (-121i8..=121)
+        .map(|v| (TritsChunk::from_dec(v), crate::Tryte::<5>::from_i64(v as i64)))
+}
+
+#[cfg(test)]
+#[test]
+fn trits_chunk_wrapping_ops() {
+    // Exhaustive over 243² pairs against Tryte<5>, the reference 5-trit ALU.
+    for (a, ta) in trits_chunk_all() {
+        for (b, tb) in trits_chunk_all() {
+            let ctx = (a.to_dec(), b.to_dec());
+            assert_eq!(a.wrapping_add(b).to_dec() as i64, (ta + tb).to_i64(), "{ctx:?}");
+            assert_eq!(a.wrapping_sub(b).to_dec() as i64, (ta - tb).to_i64(), "{ctx:?}");
+            assert_eq!(a.wrapping_mul(b).to_dec() as i64, (ta * tb).to_i64(), "{ctx:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn trits_chunk_neg_shifts() {
+    for (a, ta) in trits_chunk_all() {
+        assert_eq!((-a).to_dec() as i64, (-ta).to_i64());
+        for n in 0..=6usize {
+            let ctx = (a.to_dec(), n);
+            assert_eq!((a << n).to_dec() as i64, (ta << n).to_i64(), "{ctx:?}");
+            assert_eq!((a >> n).to_dec() as i64, (ta >> n).to_i64(), "{ctx:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn data_ternary_from_dec_roundtrip() {
+    // Covers the balance243 path at chunk boundaries (±121, ±122) and signs.
+    let values = [0, 1, -1, 121, -121, 122, -122, 243, -243, 29_524, -29_524,
+                  i32::MAX as i64, i32::MIN as i64, i64::MAX, i64::MIN];
+    for v in values {
+        assert_eq!(DataTernary::from_dec(v).to_dec(), v, "v={v}");
     }
 }
 
@@ -2747,7 +2956,7 @@ fn uter_add_u128(a: u64, b: u64, mask_l: u64) -> u64 {
 
 /// Precomputed 5-trit BCT encoding: `UTER5_LUT[v]` = 10-bit BCT word for `v < 243`.
 /// Trit k occupies bits `2k..2k+2`: `00=0, 01=1, 10=2`.
-const UTER5_LUT: [u16; 243] = {
+pub(crate) const UTER5_LUT: [u16; 243] = {
     let mut lut = [0u16; 243];
     let mut v = 0usize;
     while v < 243 {

@@ -20,6 +20,6 @@ Before merging new code, ensure that:
 3. Ideally a benchmark to back up changes (and related impacted defs)
 
 This usually involves: emitting LLVM ASM: `cargo rustc --release --lib --all-features -- --emit asm -C codegen-units=1`
-Comparing count + time/op. Promote or discard...
+Comparing count + time/op. Baseline, edit, postline: promote or discard...
 
 We do not want any cfg `target_feature` gating. We let `llvm` do this through compiling with target.

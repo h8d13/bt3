@@ -481,6 +481,35 @@ fn bench_store() {
         std::hint::black_box(chunk.to_dec());
     });
 
+    // Same 5-trit wrapping semantics as Tryte<5>: i8 math vs [Digit; 5].
+    println!("\n--- TritsChunk vs Tryte<5> (wrapping ALU) ---");
+    let (ca, cb) = (TritsChunk::from_dec(100), TritsChunk::from_dec(-47));
+    let (ta, tb) = (Tryte::<5>::from_i64(100), Tryte::<5>::from_i64(-47));
+    bench("TritsChunk::wrapping_add", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ca).wrapping_add(std::hint::black_box(cb)));
+    });
+    bench("Tryte<5> + Tryte<5>", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ta) + std::hint::black_box(tb));
+    });
+    bench("TritsChunk::wrapping_mul", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ca).wrapping_mul(std::hint::black_box(cb)));
+    });
+    bench("Tryte<5> * Tryte<5>", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ta) * std::hint::black_box(tb));
+    });
+    bench("TritsChunk << 2", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ca) << std::hint::black_box(2usize));
+    });
+    bench("Tryte<5> << 2", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ta) << std::hint::black_box(2usize));
+    });
+    bench("TritsChunk >> 2", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ca) >> std::hint::black_box(2usize));
+    });
+    bench("Tryte<5> >> 2", ITERS, || {
+        std::hint::black_box(std::hint::black_box(ta) >> std::hint::black_box(2usize));
+    });
+
     println!("\n--- DataTernary ---");
     for &n in &[5, 10, 20, 40] {
         let t = make_ternary(n);
@@ -1118,6 +1147,20 @@ fn bench_matrix() {
     bench("Tq2Matrix from_tq2_0 768×768 (2304 blocks)", ITERS / 1000, || {
         std::hint::black_box(
             Tq2Matrix::from_tq2_0(768, 768, std::hint::black_box(&tq768)));
+    });
+
+    // -- TQ1_0 load (5 trits per byte) ----------------------------------------
+    println!("\n--- TQ1_0 decode ---");
+
+    let block1 = balanced_ternary::quant::tq1_0_encode(&[a64; 4], 0x3800);
+    let tq1_768 = block1.repeat(768 * 768 / 256);
+    bench("TernaryMatrix from_tq1_0 768×768 (2304 blocks)", ITERS / 1000, || {
+        std::hint::black_box(
+            TernaryMatrix::from_tq1_0(768, 768, std::hint::black_box(&tq1_768)));
+    });
+    bench("Tq2Matrix from_tq1_0 768×768 (repack to TQ2_0)", ITERS / 1000, || {
+        std::hint::black_box(
+            Tq2Matrix::from_tq1_0(768, 768, std::hint::black_box(&tq1_768)));
     });
 
     // -- Tq2Matrix i8 kernels (t+1 codes, offset trick) ----------------------
