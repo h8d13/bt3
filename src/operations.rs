@@ -30,11 +30,13 @@
 
 use crate::concepts::DigitOperate;
 use crate::{Digit, Ternary};
-use alloc::vec;
-use alloc::vec::Vec;
-use core::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Sub, Shl, Shr};
 #[cfg(test)]
 use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::{
+	Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Shl, Shr, Sub,
+};
 
 /// Balanced ternary carry decomposition.
 ///
@@ -56,11 +58,11 @@ use alloc::string::ToString;
 /// converting to/from decimal.
 #[inline]
 fn balanced_carry(sum: i8) -> (i8, i8) {
-    // Branchless: carry is +1 when sum > 1, -1 when sum < -1, else 0.
-    // Same signum pattern as `Digit::accept_anything`.
-    // digit = sum - carry * 3 maps {2→-1, 3→0, -2→1, -3→0}, identity elsewhere.
-    let carry = (sum > 1) as i8 - (sum < -1) as i8;
-    (carry, sum - carry * 3)
+	// Branchless: carry is +1 when sum > 1, -1 when sum < -1, else 0.
+	// Same signum pattern as `Digit::accept_anything`.
+	// digit = sum - carry * 3 maps {2→-1, 3→0, -2→1, -3→0}, identity elsewhere.
+	let carry = (sum > 1) as i8 - (sum < -1) as i8;
+	(carry, sum - carry * 3)
 }
 
 /// Perform native balanced ternary addition/subtraction on two digit slices.
@@ -87,374 +89,391 @@ fn balanced_carry(sum: i8) -> (i8, i8) {
 const ADD_STACK_CAP: usize = 80;
 
 fn ternary_add_sub(a: &[Digit], b: &[Digit], negate_b: bool) -> Ternary {
-    let len = a.len().max(b.len());
+	let len = a.len().max(b.len());
 
-    // Fast path: write directly into a stack buffer in MSB-first order,
-    // avoiding a post-loop reverse() and drain()-based trim.
-    // scratch[0] holds the potential carry; scratch[1..=len] hold the digits MSB-first.
-    if len <= ADD_STACK_CAP {
-        let mut scratch = [0i8; ADD_STACK_CAP + 1];
-        let mut carry: i8 = 0;
+	// Fast path: write directly into a stack buffer in MSB-first order,
+	// avoiding a post-loop reverse() and drain()-based trim.
+	// scratch[0] holds the potential carry; scratch[1..=len] hold the digits MSB-first.
+	if len <= ADD_STACK_CAP {
+		let mut scratch = [0i8; ADD_STACK_CAP + 1];
+		let mut carry: i8 = 0;
 
-        if a.len() == b.len() {
-            // Hoist negate_b branch outside the hot loop.
-            let mut wi = len;
-            if negate_b {
-                for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
-                    let (c, d) = balanced_carry(da.to_i8() - db.to_i8() + carry);
-                    carry = c;
-                    scratch[wi] = d;
-                    wi -= 1;
-                }
-            } else {
-                for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
-                    let (c, d) = balanced_carry(da.to_i8() + db.to_i8() + carry);
-                    carry = c;
-                    scratch[wi] = d;
-                    wi -= 1;
-                }
-            }
-        } else {
-            let (oa, ob) = (len - a.len(), len - b.len());
-            for i in (0..len).rev() {
-                let da = if i < oa { 0 } else { a[i - oa].to_i8() };
-                let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
-                if negate_b { db = -db; }
-                let (c, d) = balanced_carry(da + db + carry);
-                carry = c;
-                scratch[i + 1] = d;
-            }
-        }
-        scratch[0] = carry;
+		if a.len() == b.len() {
+			// Hoist negate_b branch outside the hot loop.
+			let mut wi = len;
+			if negate_b {
+				for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+					let (c, d) =
+						balanced_carry(da.to_i8() - db.to_i8() + carry);
+					carry = c;
+					scratch[wi] = d;
+					wi -= 1;
+				}
+			} else {
+				for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+					let (c, d) =
+						balanced_carry(da.to_i8() + db.to_i8() + carry);
+					carry = c;
+					scratch[wi] = d;
+					wi -= 1;
+				}
+			}
+		} else {
+			let (oa, ob) = (len - a.len(), len - b.len());
+			for i in (0..len).rev() {
+				let da = if i < oa { 0 } else { a[i - oa].to_i8() };
+				let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
+				if negate_b {
+					db = -db;
+				}
+				let (c, d) = balanced_carry(da + db + carry);
+				carry = c;
+				scratch[i + 1] = d;
+			}
+		}
+		scratch[0] = carry;
 
-        // Find trim start: skip leading zeros, keep at least one digit.
-        let mut start = if carry != 0 { 0 } else { 1 };
-        while start < len && scratch[start] == 0 {
-            start += 1;
-        }
+		// Find trim start: skip leading zeros, keep at least one digit.
+		let mut start = if carry != 0 { 0 } else { 1 };
+		while start < len && scratch[start] == 0 {
+			start += 1;
+		}
 
-        // Single-pass copy into Vec<Digit> — no reverse, no memmove.
-        let digits = scratch[start..=len]
-            .iter()
-            // Range: balanced_carry output and carry are always in {-1, 0, 1}.
-            .map(|&v| Digit::from_trit(v))
-            .collect();
-        return Ternary::new(digits);
-    }
+		// Single-pass copy into Vec<Digit> — no reverse, no memmove.
+		let digits = scratch[start..=len]
+			.iter()
+			// Range: balanced_carry output and carry are always in {-1, 0, 1}.
+			.map(|&v| Digit::from_trit(v))
+			.collect();
+		return Ternary::new(digits);
+	}
 
-    // Fallback for operands wider than ADD_STACK_CAP trits.
-    let mut digits = Vec::with_capacity(len + 1);
-    let mut carry: i8 = 0;
-    if a.len() == b.len() {
-        for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
-            let db_val = if negate_b { -db.to_i8() } else { db.to_i8() };
-            let (c, d) = balanced_carry(da.to_i8() + db_val + carry);
-            carry = c;
-            digits.push(Digit::from_trit(d));
-        }
-    } else {
-        let (oa, ob) = (len - a.len(), len - b.len());
-        for i in (0..len).rev() {
-            let da = if i < oa { 0 } else { a[i - oa].to_i8() };
-            let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
-            if negate_b { db = -db; }
-            let (c, d) = balanced_carry(da + db + carry);
-            carry = c;
-            digits.push(Digit::from_trit(d));
-        }
-    }
-    if carry != 0 {
-        digits.push(Digit::from_trit(carry));
-    }
-    digits.reverse();
-    let first_nonzero = digits.iter().position(|d| *d != Digit::Zero);
-    match first_nonzero {
-        None => { digits.clear(); digits.push(Digit::Zero); }
-        Some(0) => {}
-        Some(pos) => { digits.drain(0..pos); }
-    }
-    Ternary::new(digits)
+	// Fallback for operands wider than ADD_STACK_CAP trits.
+	let mut digits = Vec::with_capacity(len + 1);
+	let mut carry: i8 = 0;
+	if a.len() == b.len() {
+		for (&da, &db) in a.iter().rev().zip(b.iter().rev()) {
+			let db_val = if negate_b { -db.to_i8() } else { db.to_i8() };
+			let (c, d) = balanced_carry(da.to_i8() + db_val + carry);
+			carry = c;
+			digits.push(Digit::from_trit(d));
+		}
+	} else {
+		let (oa, ob) = (len - a.len(), len - b.len());
+		for i in (0..len).rev() {
+			let da = if i < oa { 0 } else { a[i - oa].to_i8() };
+			let mut db = if i < ob { 0 } else { b[i - ob].to_i8() };
+			if negate_b {
+				db = -db;
+			}
+			let (c, d) = balanced_carry(da + db + carry);
+			carry = c;
+			digits.push(Digit::from_trit(d));
+		}
+	}
+	if carry != 0 {
+		digits.push(Digit::from_trit(carry));
+	}
+	digits.reverse();
+	let first_nonzero = digits.iter().position(|d| *d != Digit::Zero);
+	match first_nonzero {
+		None => {
+			digits.clear();
+			digits.push(Digit::Zero);
+		}
+		Some(0) => {}
+		Some(pos) => {
+			digits.drain(0..pos);
+		}
+	}
+	Ternary::new(digits)
 }
 
 impl Neg for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn neg(self) -> Self::Output {
-        self.each(|d| -d)
-    }
+	fn neg(self) -> Self::Output {
+		self.each(|d| -d)
+	}
 }
 
 impl Add<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn add(self, rhs: &Ternary) -> Self::Output {
-        ternary_add_sub(self.to_digit_slice(), rhs.to_digit_slice(), false)
-    }
+	fn add(self, rhs: &Ternary) -> Self::Output {
+		ternary_add_sub(self.to_digit_slice(), rhs.to_digit_slice(), false)
+	}
 }
 
 impl Add<Digit> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    /// Single-digit add: ripple a carry from the LSB upward.
-    ///
-    /// # Optimization: in-place carry propagation
-    ///
-    /// Instead of converting the whole number to `i64` and back, we clone
-    /// the digit array and propagate a single carry from the least-significant
-    /// trit upward. Early-exit when carry becomes zero means best-case is O(1)
-    /// and worst-case (all `Pos` + 1, full ripple) is O(n).
-    fn add(self, rhs: Digit) -> Self::Output {
-        let mut digits: Vec<Digit> = self.to_digit_slice().to_vec();
-        let mut carry = rhs.to_i8();
-        for d in digits.iter_mut().rev() {
-            if carry == 0 {
-                break;
-            }
-            let (c, r) = balanced_carry(d.to_i8() + carry);
-            // Range: balanced_carry output is in {-1, 0, 1}.
-            *d = Digit::from_trit(r);
-            carry = c;
-        }
-        if carry != 0 {
-            // Range: balanced_carry carry is in {-1, 0, 1}.
-            digits.insert(0, Digit::from_trit(carry));
-        }
-        Ternary::new(digits)
-    }
+	/// Single-digit add: ripple a carry from the LSB upward.
+	///
+	/// # Optimization: in-place carry propagation
+	///
+	/// Instead of converting the whole number to `i64` and back, we clone
+	/// the digit array and propagate a single carry from the least-significant
+	/// trit upward. Early-exit when carry becomes zero means best-case is O(1)
+	/// and worst-case (all `Pos` + 1, full ripple) is O(n).
+	fn add(self, rhs: Digit) -> Self::Output {
+		let mut digits: Vec<Digit> = self.to_digit_slice().to_vec();
+		let mut carry = rhs.to_i8();
+		for d in digits.iter_mut().rev() {
+			if carry == 0 {
+				break;
+			}
+			let (c, r) = balanced_carry(d.to_i8() + carry);
+			// Range: balanced_carry output is in {-1, 0, 1}.
+			*d = Digit::from_trit(r);
+			carry = c;
+		}
+		if carry != 0 {
+			// Range: balanced_carry carry is in {-1, 0, 1}.
+			digits.insert(0, Digit::from_trit(carry));
+		}
+		Ternary::new(digits)
+	}
 }
 
 impl Sub<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn sub(self, rhs: &Ternary) -> Self::Output {
-        ternary_add_sub(self.to_digit_slice(), rhs.to_digit_slice(), true)
-    }
+	fn sub(self, rhs: &Ternary) -> Self::Output {
+		ternary_add_sub(self.to_digit_slice(), rhs.to_digit_slice(), true)
+	}
 }
 
 impl Sub<Digit> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn sub(self, rhs: Digit) -> Self::Output {
-        // Subtraction of a digit is addition of its negation.
-        self + (-rhs)
-    }
+	fn sub(self, rhs: Digit) -> Self::Output {
+		// Subtraction of a digit is addition of its negation.
+		self + (-rhs)
+	}
 }
 
 impl Mul<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    /// # Optimization: i64 fast path + stack-buffer schoolbook fallback
-    ///
-    /// **Fast path (≤ 20 digits each):** The maximum absolute value of a
-    /// 20-digit balanced-ternary number is `(3²⁰ − 1) / 2 = 1 743 392 200`,
-    /// so the maximum product magnitude is `1 743 392 200² ≈ 3.04 × 10¹⁸`,
-    /// which is below `i64::MAX ≈ 9.22 × 10¹⁸`. We therefore delegate to
-    /// `to_dec() * rhs.to_dec()` + `from_dec()` — two O(n) passes and one
-    /// machine multiply — instead of an O(n²) digit loop. This covers every
-    /// size benchmarked (4, 10, 16, 20 digits) with no overflow risk.
-    ///
-    /// **Schoolbook fallback (> 20 digits on either side):** a stack-resident
-    /// `i8` accumulator (128 bytes) avoids heap allocation for products up to
-    /// 64 × 64 digits. Larger inputs fall back to a heap buffer.
-    fn mul(self, rhs: &Ternary) -> Self::Output {
-        let a = self.to_digit_slice();
-        let b = rhs.to_digit_slice();
+	/// # Optimization: i64 fast path + stack-buffer schoolbook fallback
+	///
+	/// **Fast path (≤ 20 digits each):** The maximum absolute value of a
+	/// 20-digit balanced-ternary number is `(3²⁰ − 1) / 2 = 1 743 392 200`,
+	/// so the maximum product magnitude is `1 743 392 200² ≈ 3.04 × 10¹⁸`,
+	/// which is below `i64::MAX ≈ 9.22 × 10¹⁸`. We therefore delegate to
+	/// `to_dec() * rhs.to_dec()` + `from_dec()` — two O(n) passes and one
+	/// machine multiply — instead of an O(n²) digit loop. This covers every
+	/// size benchmarked (4, 10, 16, 20 digits) with no overflow risk.
+	///
+	/// **Schoolbook fallback (> 20 digits on either side):** a stack-resident
+	/// `i8` accumulator (128 bytes) avoids heap allocation for products up to
+	/// 64 × 64 digits. Larger inputs fall back to a heap buffer.
+	fn mul(self, rhs: &Ternary) -> Self::Output {
+		let a = self.to_digit_slice();
+		let b = rhs.to_digit_slice();
 
-        if a.len() <= 20 && b.len() <= 20 {
-            return Ternary::from_dec(self.to_dec() * rhs.to_dec());
-        }
+		if a.len() <= 20 && b.len() <= 20 {
+			return Ternary::from_dec(self.to_dec() * rhs.to_dec());
+		}
 
-        let rlen = a.len() + b.len();
+		let rlen = a.len() + b.len();
 
-        // Stack accumulator — 128 covers products up to 64×64 digit numbers.
-        // Falls back to heap for larger inputs.
-        let mut stack_buf = [0i8; 128];
-        let mut heap_buf;
-        let acc: &mut [i8] = if rlen <= 128 {
-            &mut stack_buf[..rlen]
-        } else {
-            heap_buf = vec![0i8; rlen];
-            &mut heap_buf
-        };
+		// Stack accumulator — 128 covers products up to 64×64 digit numbers.
+		// Falls back to heap for larger inputs.
+		let mut stack_buf = [0i8; 128];
+		let mut heap_buf;
+		let acc: &mut [i8] = if rlen <= 128 {
+			&mut stack_buf[..rlen]
+		} else {
+			heap_buf = vec![0i8; rlen];
+			&mut heap_buf
+		};
 
-        for j in 0..b.len() {
-            let bd = b[j].to_i8();
-            if bd == 0 { continue; }
-            for i in 0..a.len() {
-                acc[i + j + 1] += a[i].to_i8() * bd;
-            }
-        }
+		for j in 0..b.len() {
+			let bd = b[j].to_i8();
+			if bd == 0 {
+				continue;
+			}
+			for i in 0..a.len() {
+				acc[i + j + 1] += a[i].to_i8() * bd;
+			}
+		}
 
-        // Single right-to-left carry-rebalancing pass.
-        for k in (1..rlen).rev() {
-            let v = acc[k];
-            let mut rem = v % 3;
-            let mut carry = v / 3;
-            // Branchless adjustment: same signum pattern as `balanced_carry`.
-            let adj = (rem > 1) as i8 - (rem < -1) as i8;
-            rem -= adj * 3;
-            carry += adj;
-            acc[k] = rem;
-            acc[k - 1] += carry;
-        }
+		// Single right-to-left carry-rebalancing pass.
+		for k in (1..rlen).rev() {
+			let v = acc[k];
+			let mut rem = v % 3;
+			let mut carry = v / 3;
+			// Branchless adjustment: same signum pattern as `balanced_carry`.
+			let adj = (rem > 1) as i8 - (rem < -1) as i8;
+			rem -= adj * 3;
+			carry += adj;
+			acc[k] = rem;
+			acc[k - 1] += carry;
+		}
 
-        // Rebalance position 0 — may produce one extra carry digit.
-        let v0 = acc[0];
-        let extra = if !(-1..=1).contains(&v0) {
-            let mut rem = v0 % 3;
-            let mut carry = v0 / 3;
-            if rem > 1 { rem -= 3; carry += 1; }
-            else if rem < -1 { rem += 3; carry -= 1; }
-            acc[0] = rem;
-            if carry != 0 { Some(carry) } else { None }
-        } else {
-            None
-        };
+		// Rebalance position 0 — may produce one extra carry digit.
+		let v0 = acc[0];
+		let extra = if !(-1..=1).contains(&v0) {
+			let mut rem = v0 % 3;
+			let mut carry = v0 / 3;
+			if rem > 1 {
+				rem -= 3;
+				carry += 1;
+			} else if rem < -1 {
+				rem += 3;
+				carry -= 1;
+			}
+			acc[0] = rem;
+			if carry != 0 { Some(carry) } else { None }
+		} else {
+			None
+		};
 
-        // Build result. All rebalanced values are in {-1,0,1}, so each i8
-        // maps directly to Digit — no match/branch per element.
-        let first_nz = acc.iter().position(|&v| v != 0);
-        match (extra, first_nz) {
-            (Some(c), _) => {
-                let mut digits = Vec::with_capacity(1 + rlen);
-                digits.push(Digit::from_trit(c));
-                for &v in acc.iter() {
-                    digits.push(Digit::from_trit(v));
-                }
-                Ternary::new(digits)
-            }
-            (None, None) => Ternary::new(vec![Digit::Zero]),
-            (None, Some(pos)) => {
-                let mut digits = Vec::with_capacity(rlen - pos);
-                for &v in &acc[pos..] {
-                    digits.push(Digit::from_trit(v));
-                }
-                Ternary::new(digits)
-            }
-        }
-    }
+		// Build result. All rebalanced values are in {-1,0,1}, so each i8
+		// maps directly to Digit — no match/branch per element.
+		let first_nz = acc.iter().position(|&v| v != 0);
+		match (extra, first_nz) {
+			(Some(c), _) => {
+				let mut digits = Vec::with_capacity(1 + rlen);
+				digits.push(Digit::from_trit(c));
+				for &v in acc.iter() {
+					digits.push(Digit::from_trit(v));
+				}
+				Ternary::new(digits)
+			}
+			(None, None) => Ternary::new(vec![Digit::Zero]),
+			(None, Some(pos)) => {
+				let mut digits = Vec::with_capacity(rlen - pos);
+				for &v in &acc[pos..] {
+					digits.push(Digit::from_trit(v));
+				}
+				Ternary::new(digits)
+			}
+		}
+	}
 }
 
 impl Div<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn div(self, rhs: &Ternary) -> Self::Output {
-        Ternary::from_dec(
-            self.to_dec()
-                .checked_div(rhs.to_dec())
-                .expect("Overflow in division or division by zero."),
-        )
-    }
+	fn div(self, rhs: &Ternary) -> Self::Output {
+		Ternary::from_dec(
+			self.to_dec()
+				.checked_div(rhs.to_dec())
+				.expect("Overflow in division or division by zero."),
+		)
+	}
 }
 
 impl BitAnd<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn bitand(self, rhs: &Ternary) -> Self::Output {
-        self.each_zip(Digit::bitand, rhs.clone())
-    }
+	fn bitand(self, rhs: &Ternary) -> Self::Output {
+		self.each_zip(Digit::bitand, rhs.clone())
+	}
 }
 
 impl BitOr<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn bitor(self, rhs: &Ternary) -> Self::Output {
-        self.each_zip(Digit::bitor, rhs.clone())
-    }
+	fn bitor(self, rhs: &Ternary) -> Self::Output {
+		self.each_zip(Digit::bitor, rhs.clone())
+	}
 }
 
 impl BitXor<&Ternary> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn bitxor(self, rhs: &Ternary) -> Self::Output {
-        self.each_zip(Digit::bitxor, rhs.clone())
-    }
+	fn bitxor(self, rhs: &Ternary) -> Self::Output {
+		self.each_zip(Digit::bitxor, rhs.clone())
+	}
 }
 
 impl Shl<usize> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    /// # Optimization: pre-allocated vec + memset zero-fill
-    ///
-    /// Output length = input length + shift amount. Single zeroed allocation
-    /// (memset), then `copy_from_slice` (memcpy) over the leading digits.
-    fn shl(self, rhs: usize) -> Self::Output {
-        let slice = self.to_digit_slice();
-        let n = slice.len();
-        let mut digits = vec![Digit::Zero; n.strict_add(rhs)];
-        digits[..n].copy_from_slice(slice);
-        Ternary::new(digits)
-    }
+	/// # Optimization: pre-allocated vec + memset zero-fill
+	///
+	/// Output length = input length + shift amount. Single zeroed allocation
+	/// (memset), then `copy_from_slice` (memcpy) over the leading digits.
+	fn shl(self, rhs: usize) -> Self::Output {
+		let slice = self.to_digit_slice();
+		let n = slice.len();
+		let mut digits = vec![Digit::Zero; n.strict_add(rhs)];
+		digits[..n].copy_from_slice(slice);
+		Ternary::new(digits)
+	}
 }
 
 impl Shr<usize> for &Ternary {
-    type Output = Ternary;
+	type Output = Ternary;
 
-    fn shr(self, rhs: usize) -> Self::Output {
-        if rhs >= self.to_digit_slice().len() {
-            return Ternary::new(vec![Digit::Zero]);
-        }
-        let len = self.to_digit_slice().len() - rhs;
-        Ternary::new(self.to_digit_slice()[..len].to_vec())
-    }
+	fn shr(self, rhs: usize) -> Self::Output {
+		if rhs >= self.to_digit_slice().len() {
+			return Ternary::new(vec![Digit::Zero]);
+		}
+		let len = self.to_digit_slice().len() - rhs;
+		Ternary::new(self.to_digit_slice()[..len].to_vec())
+	}
 }
 
 impl Not for &Ternary {
-    type Output = Ternary;
-    fn not(self) -> Self::Output {
-        -self
-    }
+	type Output = Ternary;
+	fn not(self) -> Self::Output {
+		-self
+	}
 }
 
 #[cfg(test)]
 #[test]
 fn test_ternary_ops() {
+	let repr9 = Ternary::parse("+00");
+	let repr4 = Ternary::parse("++");
+	let repr13 = &repr9 + &repr4;
+	let repr17 = &repr13 + &repr4;
+	let repr34 = &repr17 + &repr17;
 
-    let repr9 = Ternary::parse("+00");
-    let repr4 = Ternary::parse("++");
-    let repr13 = &repr9 + &repr4;
-    let repr17 = &repr13 + &repr4;
-    let repr34 = &repr17 + &repr17;
+	assert_eq!(repr13.to_string(), "+++");
+	assert_eq!(repr17.to_string(), "+-0-");
+	assert_eq!(repr34.to_string(), "++-+");
 
-    assert_eq!(repr13.to_string(), "+++");
-    assert_eq!(repr17.to_string(), "+-0-");
-    assert_eq!(repr34.to_string(), "++-+");
+	let repr30 = &repr34 - &repr4;
+	assert_eq!(repr30.to_dec(), 30);
+	assert_eq!(repr30.to_string(), "+0+0");
 
-    let repr30 = &repr34 - &repr4;
-    assert_eq!(repr30.to_dec(), 30);
-    assert_eq!(repr30.to_string(), "+0+0");
+	let repr120 = &repr30 * &repr4;
+	assert_eq!(repr120.to_dec(), 120);
+	assert_eq!(repr120.to_string(), "++++0");
 
-    let repr120 = &repr30 * &repr4;
-    assert_eq!(repr120.to_dec(), 120);
-    assert_eq!(repr120.to_string(), "++++0");
+	let repr_neg120 = -&repr120;
+	assert_eq!(repr_neg120.to_dec(), -120);
+	assert_eq!(repr_neg120.to_string(), "----0");
 
-    let repr_neg120 = -&repr120;
-    assert_eq!(repr_neg120.to_dec(), -120);
-    assert_eq!(repr_neg120.to_string(), "----0");
+	let bitwise = &Ternary::parse("++00") & &Ternary::parse("0000");
+	assert_eq!(bitwise.to_string(), "0000");
 
-    let bitwise = &Ternary::parse("++00") & &Ternary::parse("0000");
-    assert_eq!(bitwise.to_string(), "0000");
+	let bitwise = &Ternary::parse("++00") & &Ternary::parse("0+00");
+	assert_eq!(bitwise.to_string(), "0+00");
 
-    let bitwise = &Ternary::parse("++00") & &Ternary::parse("0+00");
-    assert_eq!(bitwise.to_string(), "0+00");
+	let bitwise = &Ternary::parse("+000") | &Ternary::parse("000-");
+	assert_eq!(bitwise.to_string(), "+000");
 
-    let bitwise = &Ternary::parse("+000") | &Ternary::parse("000-");
-    assert_eq!(bitwise.to_string(), "+000");
+	let bitwise = &Ternary::parse("+000") & &Ternary::parse("000-");
+	assert_eq!(bitwise.to_string(), "000-");
 
-    let bitwise = &Ternary::parse("+000") & &Ternary::parse("000-");
-    assert_eq!(bitwise.to_string(), "000-");
-
-    let bitwise = &Ternary::parse("+000") | &Ternary::parse("000+");
-    assert_eq!(bitwise.to_string(), "+00+");
+	let bitwise = &Ternary::parse("+000") | &Ternary::parse("000+");
+	assert_eq!(bitwise.to_string(), "+00+");
 }
 
 #[cfg(test)]
 #[test]
 fn test_shift_ops() {
-    let t = Ternary::parse("+0-");
-    assert_eq!((&t << 2).to_string(), "+0-00");
-    let back = &(&t << 2) >> 2;
-    assert_eq!(back.to_string(), "+0-");
-    let zero = &t >> 5;
-    assert_eq!(zero.to_string(), "0");
+	let t = Ternary::parse("+0-");
+	assert_eq!((&t << 2).to_string(), "+0-00");
+	let back = &(&t << 2) >> 2;
+	assert_eq!(back.to_string(), "+0-");
+	let zero = &t >> 5;
+	assert_eq!(zero.to_string(), "0");
 }

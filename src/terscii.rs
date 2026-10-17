@@ -45,8 +45,7 @@ const ENCODE_LUT: [i8; 128] = [
 /// row 7:   HT   !   7   G   P   Y   g   p   y
 /// row 8:   SD   ?   8   H   Q   Z   h   q   z
 /// ```
-pub const TABLE: &str =
-    "\x00 09IR_ir\x01-1AJSajs\x02'2BKTbkt\x03,3CLUclu\
+pub const TABLE: &str = "\x00 09IR_ir\x01-1AJSajs\x02'2BKTbkt\x03,3CLUclu\
      \x04;4DMVdmv\x05:5ENWenw\x06.6FOXfox\x07!7GPYgpy\x08?8HQZhqz";
 
 /// A TERSCII character in its natural 4-trit BCT (binary-coded ternary) representation.
@@ -61,64 +60,67 @@ pub const TABLE: &str =
 pub struct TersciiCode(u8);
 
 impl TersciiCode {
-    /// Returns the raw BCT4 byte.
-    #[inline] pub const fn raw(self) -> u8 { self.0 }
+	/// Returns the raw BCT4 byte.
+	#[inline]
+	pub const fn raw(self) -> u8 {
+		self.0
+	}
 
-    /// Extracts the four unbalanced ternary digits `[t3, t2, t1, t0]` (each 0–2).
-    #[inline]
-    pub const fn digits(self) -> [u8; 4] {
-        [
-            (self.0 >> 6) & 3,
-            (self.0 >> 4) & 3,
-            (self.0 >> 2) & 3,
-             self.0       & 3,
-        ]
-    }
+	/// Extracts the four unbalanced ternary digits `[t3, t2, t1, t0]` (each 0–2).
+	#[inline]
+	pub const fn digits(self) -> [u8; 4] {
+		[
+			(self.0 >> 6) & 3,
+			(self.0 >> 4) & 3,
+			(self.0 >> 2) & 3,
+			self.0 & 3,
+		]
+	}
 
-    /// Returns the TERSCII decimal value (0–80).
-    #[inline]
-    pub const fn to_dec(self) -> u8 {
-        let d = self.digits();
-        d[0] * 27 + d[1] * 9 + d[2] * 3 + d[3]
-    }
+	/// Returns the TERSCII decimal value (0–80).
+	#[inline]
+	pub const fn to_dec(self) -> u8 {
+		let d = self.digits();
+		d[0] * 27 + d[1] * 9 + d[2] * 3 + d[3]
+	}
 
-    /// Converts to the equivalent balanced [`Ternary`] value.
-    #[inline]
-    pub fn to_ternary(self) -> Ternary {
-        Ternary::from_dec(self.to_dec() as i64)
-    }
+	/// Converts to the equivalent balanced [`Ternary`] value.
+	#[inline]
+	pub fn to_ternary(self) -> Ternary {
+		Ternary::from_dec(self.to_dec() as i64)
+	}
 }
 
 impl core::fmt::Display for TersciiCode {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let d = self.digits();
-        write!(f, "{}{}{}{}", d[0], d[1], d[2], d[3])
-    }
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		let d = self.digits();
+		write!(f, "{}{}{}{}", d[0], d[1], d[2], d[3])
+	}
 }
 
 /// Converts a TERSCII decimal value 0–80 to its 4-trit BCT u8.
 const fn dec_to_bct4(v: u8) -> u8 {
-    let t3 = v / 27;
-    let t2 = (v % 27) / 9;
-    let t1 = (v % 9) / 3;
-    let t0 = v % 3;
-    (t3 << 6) | (t2 << 4) | (t1 << 2) | t0
+	let t3 = v / 27;
+	let t2 = (v % 27) / 9;
+	let t1 = (v % 9) / 3;
+	let t0 = v % 3;
+	(t3 << 6) | (t2 << 4) | (t1 << 2) | t0
 }
 
 /// ASCII code → TERSCII BCT4 raw byte (0xFF = not in TERSCII table).
 ///
 /// Combines ENCODE_LUT + BCT4 conversion in a single precomputed 128-byte table.
 const ENCODE_CODE_LUT: [u8; 128] = {
-    let mut lut = [0xFFu8; 128];
-    let mut i = 0usize;
-    while i < 128 {
-        let v = ENCODE_LUT[i];
-        if v >= 0 {
-            lut[i] = dec_to_bct4(v as u8);
-        }
-        i += 1;
-    }
-    lut
+	let mut lut = [0xFFu8; 128];
+	let mut i = 0usize;
+	while i < 128 {
+		let v = ENCODE_LUT[i];
+		if v >= 0 {
+			lut[i] = dec_to_bct4(v as u8);
+		}
+		i += 1;
+	}
+	lut
 };
 
 /// TERSCII BCT4 raw byte → ASCII byte (0xFF = invalid BCT or out of range).
@@ -127,14 +129,14 @@ const ENCODE_CODE_LUT: [u8; 128] = {
 /// All other entries (invalid BCT patterns where any 2-bit group = `11`, or values
 /// beyond 0xAA) remain 0xFF.
 const DECODE_CODE_LUT: [u8; 256] = {
-    let mut lut = [0xFFu8; 256];
-    let table = TABLE.as_bytes();
-    let mut v = 0usize;
-    while v < 81 {
-        lut[dec_to_bct4(v as u8) as usize] = table[v];
-        v += 1;
-    }
-    lut
+	let mut lut = [0xFFu8; 256];
+	let table = TABLE.as_bytes();
+	let mut v = 0usize;
+	while v < 81 {
+		lut[dec_to_bct4(v as u8) as usize] = table[v];
+		v += 1;
+	}
+	lut
 };
 
 /// Encode a character to its TERSCII value as a [`TersciiCode`] (4-trit BCT, O(1)).
@@ -145,13 +147,17 @@ const DECODE_CODE_LUT: [u8; 256] = {
 /// Single `ENCODE_CODE_LUT` lookup — symmetric with [`decode_code`].
 #[inline]
 pub fn encode_code(c: char) -> Option<TersciiCode> {
-    let code = c as u32;
-    if code < 128 {
-        let raw = ENCODE_CODE_LUT[code as usize];
-        if raw != 0xFF { Some(TersciiCode(raw)) } else { None }
-    } else {
-        None
-    }
+	let code = c as u32;
+	if code < 128 {
+		let raw = ENCODE_CODE_LUT[code as usize];
+		if raw != 0xFF {
+			Some(TersciiCode(raw))
+		} else {
+			None
+		}
+	} else {
+		None
+	}
 }
 
 /// Decode a [`TersciiCode`] back to its character (O(1) single LUT lookup).
@@ -162,8 +168,12 @@ pub fn encode_code(c: char) -> Option<TersciiCode> {
 /// Single `DECODE_CODE_LUT` lookup — symmetric with [`encode_code`].
 #[inline]
 pub fn decode_code(code: TersciiCode) -> Option<char> {
-    let byte = DECODE_CODE_LUT[code.0 as usize];
-    if byte != 0xFF { Some(byte as char) } else { None }
+	let byte = DECODE_CODE_LUT[code.0 as usize];
+	if byte != 0xFF {
+		Some(byte as char)
+	} else {
+		None
+	}
 }
 
 /// Encode a character to its TERSCII [`Ternary`] value (0–80).
@@ -172,13 +182,17 @@ pub fn decode_code(code: TersciiCode) -> Option<char> {
 /// Uses an O(1) 128-entry LUT for all ASCII characters.
 #[inline]
 pub fn encode(c: char) -> Option<Ternary> {
-    let code = c as u32;
-    if code < 128 {
-        let v = ENCODE_LUT[code as usize];
-        if v >= 0 { Some(Ternary::from_dec(v as i64)) } else { None }
-    } else {
-        None
-    }
+	let code = c as u32;
+	if code < 128 {
+		let v = ENCODE_LUT[code as usize];
+		if v >= 0 {
+			Some(Ternary::from_dec(v as i64))
+		} else {
+			None
+		}
+	} else {
+		None
+	}
 }
 
 /// Decode a [`Ternary`] value (0–80) back to its TERSCII character.
@@ -187,12 +201,12 @@ pub fn encode(c: char) -> Option<Ternary> {
 /// Uses O(1) byte indexing since all TERSCII chars are single-byte ASCII.
 #[inline]
 pub fn decode(t: &Ternary) -> Option<char> {
-    let v = t.to_dec();
-    if v >= 0 && (v as usize) < 81 {
-        Some(TABLE.as_bytes()[v as usize] as char)
-    } else {
-        None
-    }
+	let v = t.to_dec();
+	if v >= 0 && (v as usize) < 81 {
+		Some(TABLE.as_bytes()[v as usize] as char)
+	} else {
+		None
+	}
 }
 
 /// Encode a string into a `Vec` of [`TersciiCode`]s.
@@ -202,14 +216,18 @@ pub fn decode(t: &Ternary) -> Option<char> {
 /// Uses `bytes()` (TERSCII is ASCII-only) and pre-allocates the Vec once.
 #[inline]
 pub fn encode_str(s: &str) -> Option<alloc::vec::Vec<TersciiCode>> {
-    let mut v = alloc::vec::Vec::with_capacity(s.len());
-    for b in s.bytes() {
-        if b >= 128 { return None; }
-        let raw = ENCODE_CODE_LUT[b as usize];
-        if raw == 0xFF { return None; }
-        v.push(TersciiCode(raw));
-    }
-    Some(v)
+	let mut v = alloc::vec::Vec::with_capacity(s.len());
+	for b in s.bytes() {
+		if b >= 128 {
+			return None;
+		}
+		let raw = ENCODE_CODE_LUT[b as usize];
+		if raw == 0xFF {
+			return None;
+		}
+		v.push(TersciiCode(raw));
+	}
+	Some(v)
 }
 
 /// Decode a slice of [`TersciiCode`]s back to a `String`.
@@ -220,13 +238,15 @@ pub fn encode_str(s: &str) -> Option<alloc::vec::Vec<TersciiCode>> {
 /// so `push` takes its one-byte fast path.
 #[inline]
 pub fn decode_codes(codes: &[TersciiCode]) -> Option<alloc::string::String> {
-    let mut s = alloc::string::String::with_capacity(codes.len());
-    for &code in codes {
-        let byte = DECODE_CODE_LUT[code.0 as usize];
-        if byte == 0xFF { return None; }
-        s.push(byte as char);
-    }
-    Some(s)
+	let mut s = alloc::string::String::with_capacity(codes.len());
+	for &code in codes {
+		let byte = DECODE_CODE_LUT[code.0 as usize];
+		if byte == 0xFF {
+			return None;
+		}
+		s.push(byte as char);
+	}
+	Some(s)
 }
 
 /// Precomputed balanced ternary digit bytes for each TERSCII value 0–80.
@@ -234,91 +254,107 @@ pub fn decode_codes(codes: &[TersciiCode]) -> Option<alloc::string::String> {
 /// Each entry is `(bytes, len)`: `bytes[..len]` is the +/0/- ASCII representation,
 /// MSB first, with no leading zeros (except `"0"` for value 0).
 static BALANCED_LUT: [([u8; 5], u8); 81] = {
-    const fn digit_char(d: i64) -> u8 {
-        if d > 0 { b'+' } else if d < 0 { b'-' } else { b'0' }
-    }
-    const fn entry(v: u8) -> ([u8; 5], u8) {
-        if v == 0 { return ([b'0', 0, 0, 0, 0], 1); }
-        let mut raw = [0i64; 5];
-        let mut n = v as i64;
-        let mut cnt = 0usize;
-        while n != 0 {
-            let r = n.rem_euclid(3);
-            let t = if r <= 1 { r } else { r - 3 };
-            raw[cnt] = t;
-            n = (n - t) / 3;
-            cnt += 1;
-        }
-        let mut buf = [0u8; 5];
-        let mut j = 0;
-        while j < cnt {
-            buf[j] = digit_char(raw[cnt - 1 - j]);
-            j += 1;
-        }
-        (buf, cnt as u8)
-    }
-    let mut lut = [([0u8; 5], 0u8); 81];
-    let mut i = 0;
-    while i < 81 { lut[i] = entry(i as u8); i += 1; }
-    lut
+	const fn digit_char(d: i64) -> u8 {
+		if d > 0 {
+			b'+'
+		} else if d < 0 {
+			b'-'
+		} else {
+			b'0'
+		}
+	}
+	const fn entry(v: u8) -> ([u8; 5], u8) {
+		if v == 0 {
+			return ([b'0', 0, 0, 0, 0], 1);
+		}
+		let mut raw = [0i64; 5];
+		let mut n = v as i64;
+		let mut cnt = 0usize;
+		while n != 0 {
+			let r = n.rem_euclid(3);
+			let t = if r <= 1 { r } else { r - 3 };
+			raw[cnt] = t;
+			n = (n - t) / 3;
+			cnt += 1;
+		}
+		let mut buf = [0u8; 5];
+		let mut j = 0;
+		while j < cnt {
+			buf[j] = digit_char(raw[cnt - 1 - j]);
+			j += 1;
+		}
+		(buf, cnt as u8)
+	}
+	let mut lut = [([0u8; 5], 0u8); 81];
+	let mut i = 0;
+	while i < 81 {
+		lut[i] = entry(i as u8);
+		i += 1;
+	}
+	lut
 };
 
 /// Precomputed 4-digit unbalanced ternary bytes (`b"0000"`..`b"2222"`) per value 0–80.
 static UNBALANCED_LUT: [[u8; 4]; 81] = {
-    let mut lut = [[0u8; 4]; 81];
-    let mut i = 0;
-    while i < 81 {
-        let mut n = i;
-        let mut j = 4;
-        while j > 0 {
-            j -= 1;
-            lut[i][j] = b'0' + (n % 3) as u8;
-            n /= 3;
-        }
-        i += 1;
-    }
-    lut
+	let mut lut = [[0u8; 4]; 81];
+	let mut i = 0;
+	while i < 81 {
+		let mut n = i;
+		let mut j = 4;
+		while j > 0 {
+			j -= 1;
+			lut[i][j] = b'0' + (n % 3) as u8;
+			n /= 3;
+		}
+		i += 1;
+	}
+	lut
 };
 
 /// Byte LUT entry → `&str`. Runs at compile time: a non-ASCII entry fails the build.
 const fn lut_str(bytes: &'static [u8]) -> &'static str {
-    match core::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => panic!("TERSCII LUT entry is not UTF-8"),
-    }
+	match core::str::from_utf8(bytes) {
+		Ok(s) => s,
+		Err(_) => panic!("TERSCII LUT entry is not UTF-8"),
+	}
 }
 
 /// `&str` views of the byte LUTs, so formatting appends whole codes at once.
 static BALANCED_STR: [&str; 81] = {
-    let mut out = [""; 81];
-    let mut i = 0;
-    while i < 81 {
-        let (bytes, len) = &BALANCED_LUT[i];
-        out[i] = lut_str(bytes.split_at(*len as usize).0);
-        i += 1;
-    }
-    out
+	let mut out = [""; 81];
+	let mut i = 0;
+	while i < 81 {
+		let (bytes, len) = &BALANCED_LUT[i];
+		out[i] = lut_str(bytes.split_at(*len as usize).0);
+		i += 1;
+	}
+	out
 };
 static UNBALANCED_STR: [&str; 81] = {
-    let mut out = [""; 81];
-    let mut i = 0;
-    while i < 81 {
-        out[i] = lut_str(&UNBALANCED_LUT[i]);
-        i += 1;
-    }
-    out
+	let mut out = [""; 81];
+	let mut i = 0;
+	while i < 81 {
+		out[i] = lut_str(&UNBALANCED_LUT[i]);
+		i += 1;
+	}
+	out
 };
 
 /// Space-joins the `lut` string of each code; `max_len` bounds one entry.
-fn join_codes(codes: &[TersciiCode], lut: &[&str; 81], max_len: usize)
-    -> alloc::string::String
-{
-    let mut s = alloc::string::String::with_capacity(codes.len() * (max_len + 1));
-    for (i, &code) in codes.iter().enumerate() {
-        if i != 0 { s.push(' '); }
-        s.push_str(lut[code.to_dec() as usize]);
-    }
-    s
+fn join_codes(
+	codes: &[TersciiCode],
+	lut: &[&str; 81],
+	max_len: usize,
+) -> alloc::string::String {
+	let mut s =
+		alloc::string::String::with_capacity(codes.len() * (max_len + 1));
+	for (i, &code) in codes.iter().enumerate() {
+		if i != 0 {
+			s.push(' ');
+		}
+		s.push_str(lut[code.to_dec() as usize]);
+	}
+	s
 }
 
 /// Format a slice of [`TersciiCode`]s as space-separated 4-digit unbalanced ternary (`"2210 1220 …"`).
@@ -326,7 +362,7 @@ fn join_codes(codes: &[TersciiCode], lut: &[&str; 81], max_len: usize)
 /// # Performance
 /// Single allocation; one precomputed `&str` append per code, no format machinery.
 pub fn unbalanced_str(codes: &[TersciiCode]) -> alloc::string::String {
-    join_codes(codes, &UNBALANCED_STR, 4)
+	join_codes(codes, &UNBALANCED_STR, 4)
 }
 
 /// Format a slice of [`TersciiCode`]s as space-separated balanced ternary (`"+0-+0 +-0-0 …"`).
@@ -334,103 +370,106 @@ pub fn unbalanced_str(codes: &[TersciiCode]) -> alloc::string::String {
 /// # Performance
 /// Single allocation; one precomputed `&str` append per code, no format machinery.
 pub fn balanced_str(codes: &[TersciiCode]) -> alloc::string::String {
-    join_codes(codes, &BALANCED_STR, 5)
+	join_codes(codes, &BALANCED_STR, 5)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use alloc::string::String;
+	use super::*;
+	use alloc::string::String;
 
-    #[test]
-    fn test_known_values() {
-        assert_eq!(encode(' ').unwrap().to_dec(), 1);
-        assert_eq!(encode('H').unwrap().to_dec(), 75);
-        assert_eq!(encode('e').unwrap().to_dec(), 51);
-        assert_eq!(encode('l').unwrap().to_dec(), 34);
-        assert_eq!(encode('o').unwrap().to_dec(), 61);
-        assert_eq!(encode(',').unwrap().to_dec(), 28);
-        assert_eq!(encode('W').unwrap().to_dec(), 50);
-        assert_eq!(encode('r').unwrap().to_dec(), 8);
-        assert_eq!(encode('d').unwrap().to_dec(), 42);
-        assert_eq!(encode('!').unwrap().to_dec(), 64);
-    }
+	#[test]
+	fn test_known_values() {
+		assert_eq!(encode(' ').unwrap().to_dec(), 1);
+		assert_eq!(encode('H').unwrap().to_dec(), 75);
+		assert_eq!(encode('e').unwrap().to_dec(), 51);
+		assert_eq!(encode('l').unwrap().to_dec(), 34);
+		assert_eq!(encode('o').unwrap().to_dec(), 61);
+		assert_eq!(encode(',').unwrap().to_dec(), 28);
+		assert_eq!(encode('W').unwrap().to_dec(), 50);
+		assert_eq!(encode('r').unwrap().to_dec(), 8);
+		assert_eq!(encode('d').unwrap().to_dec(), 42);
+		assert_eq!(encode('!').unwrap().to_dec(), 64);
+	}
 
-    #[test]
-    fn test_roundtrip_hello_world() {
-        let msg: String = "Hello, World!"
-            .chars()
-            .map(|c| decode(&encode(c).unwrap()).unwrap())
-            .collect();
-        assert_eq!(msg, "Hello, World!");
-    }
+	#[test]
+	fn test_roundtrip_hello_world() {
+		let msg: String = "Hello, World!"
+			.chars()
+			.map(|c| decode(&encode(c).unwrap()).unwrap())
+			.collect();
+		assert_eq!(msg, "Hello, World!");
+	}
 
-    #[test]
-    fn test_roundtrip_all_printable() {
-        let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-        for c in printable.chars() {
-            let t = encode(c).unwrap_or_else(|| panic!("encode({c:?}) failed"));
-            let c2 = decode(&t).unwrap_or_else(|| panic!("decode failed for {c:?}"));
-            assert_eq!(c, c2);
-        }
-    }
+	#[test]
+	fn test_roundtrip_all_printable() {
+		let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+		for c in printable.chars() {
+			let t = encode(c).unwrap_or_else(|| panic!("encode({c:?}) failed"));
+			let c2 =
+				decode(&t).unwrap_or_else(|| panic!("decode failed for {c:?}"));
+			assert_eq!(c, c2);
+		}
+	}
 
-    #[test]
-    fn test_decode_out_of_range() {
-        assert!(decode(&Ternary::from_dec(-1)).is_none());
-        assert!(decode(&Ternary::from_dec(81)).is_none());
-        assert!(decode(&Ternary::from_dec(100)).is_none());
-    }
+	#[test]
+	fn test_decode_out_of_range() {
+		assert!(decode(&Ternary::from_dec(-1)).is_none());
+		assert!(decode(&Ternary::from_dec(81)).is_none());
+		assert!(decode(&Ternary::from_dec(100)).is_none());
+	}
 
-    #[test]
-    fn test_encode_unknown() {
-        assert!(encode('€').is_none());
-        assert!(encode('α').is_none());
-    }
+	#[test]
+	fn test_encode_unknown() {
+		assert!(encode('€').is_none());
+		assert!(encode('α').is_none());
+	}
 
-    #[test]
-    fn test_table_length() {
-        assert_eq!(TABLE.chars().count(), 81);
-    }
+	#[test]
+	fn test_table_length() {
+		assert_eq!(TABLE.chars().count(), 81);
+	}
 
-    #[test]
-    fn test_encode_code_known_values() {
-        // BCT4 encoding: v = t3*27 + t2*9 + t1*3 + t0, BCT = (t3<<6)|(t2<<4)|(t1<<2)|t0
-        // 'H' = 75: 75 = 2*27+2*9+1*3+0 = [2,2,1,0] → BCT = 0b10_10_01_00 = 0xA4
-        assert_eq!(encode_code('H').map(|c| c.raw()), Some(0xA4));
-        // ' ' = 1:  1  = 0*27+0*9+0*3+1 = [0,0,0,1] → BCT = 0b00_00_00_01 = 0x01
-        assert_eq!(encode_code(' ').map(|c| c.raw()), Some(0x01));
-        // '0' = 2:  2  = 0*27+0*9+0*3+2 = [0,0,0,2] → BCT = 0b00_00_00_10 = 0x02
-        assert_eq!(encode_code('0').map(|c| c.raw()), Some(0x02));
-        assert!(encode_code('€').is_none());
-    }
+	#[test]
+	fn test_encode_code_known_values() {
+		// BCT4 encoding: v = t3*27 + t2*9 + t1*3 + t0, BCT = (t3<<6)|(t2<<4)|(t1<<2)|t0
+		// 'H' = 75: 75 = 2*27+2*9+1*3+0 = [2,2,1,0] → BCT = 0b10_10_01_00 = 0xA4
+		assert_eq!(encode_code('H').map(|c| c.raw()), Some(0xA4));
+		// ' ' = 1:  1  = 0*27+0*9+0*3+1 = [0,0,0,1] → BCT = 0b00_00_00_01 = 0x01
+		assert_eq!(encode_code(' ').map(|c| c.raw()), Some(0x01));
+		// '0' = 2:  2  = 0*27+0*9+0*3+2 = [0,0,0,2] → BCT = 0b00_00_00_10 = 0x02
+		assert_eq!(encode_code('0').map(|c| c.raw()), Some(0x02));
+		assert!(encode_code('€').is_none());
+	}
 
-    #[test]
-    fn test_decode_code_roundtrip_hello_world() {
-        let msg: alloc::string::String = "Hello, World!"
-            .chars()
-            .map(|c| decode_code(encode_code(c).unwrap()).unwrap())
-            .collect();
-        assert_eq!(msg, "Hello, World!");
-    }
+	#[test]
+	fn test_decode_code_roundtrip_hello_world() {
+		let msg: alloc::string::String = "Hello, World!"
+			.chars()
+			.map(|c| decode_code(encode_code(c).unwrap()).unwrap())
+			.collect();
+		assert_eq!(msg, "Hello, World!");
+	}
 
-    #[test]
-    fn test_decode_code_invalid_bct() {
-        // 0xFF = 0b11_11_11_11: all 2-bit groups are 11 → invalid BCT
-        assert!(decode_code(TersciiCode(0xFF)).is_none());
-        // 0x03 = 0b00_00_00_11: last group is 11 → invalid
-        assert!(decode_code(TersciiCode(0x03)).is_none());
-        // 0xAB = 0b10_10_10_11: last group is 11 → invalid
-        assert!(decode_code(TersciiCode(0xAB)).is_none());
-    }
+	#[test]
+	fn test_decode_code_invalid_bct() {
+		// 0xFF = 0b11_11_11_11: all 2-bit groups are 11 → invalid BCT
+		assert!(decode_code(TersciiCode(0xFF)).is_none());
+		// 0x03 = 0b00_00_00_11: last group is 11 → invalid
+		assert!(decode_code(TersciiCode(0x03)).is_none());
+		// 0xAB = 0b10_10_10_11: last group is 11 → invalid
+		assert!(decode_code(TersciiCode(0xAB)).is_none());
+	}
 
-    #[test]
-    fn test_code_roundtrip_all_printable() {
-        let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-        for c in printable.chars() {
-            let code = encode_code(c).unwrap_or_else(|| panic!("encode_code({c:?}) failed"));
-            let c2 = decode_code(code).unwrap_or_else(|| panic!("decode_code failed for {c:?}"));
-            assert_eq!(c, c2);
-        }
-    }
+	#[test]
+	fn test_code_roundtrip_all_printable() {
+		let printable = " -',.;:.!?01234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+		for c in printable.chars() {
+			let code = encode_code(c)
+				.unwrap_or_else(|| panic!("encode_code({c:?}) failed"));
+			let c2 = decode_code(code)
+				.unwrap_or_else(|| panic!("decode_code failed for {c:?}"));
+			assert_eq!(c, c2);
+		}
+	}
 }
